@@ -429,8 +429,11 @@ static void RegexExtractFunction(DataChunk &args, ExpressionState &state, Vector
 		auto &cache = ExecuteFunctionState::GetFunctionState(state)->Cast<RegexPatternCacheState>().cache;
 		BinaryExecutor::Execute<string_t, string_t, string_t>(
 		    strings, patterns, result, [&](string_t input, string_t pattern) {
-			    return ExtractCaptureGroup(input, cache.Get(CreateStringPiece(pattern)), info.group_index,
-			                               info.no_match_returns_input);
+			    auto &re = cache.Get(CreateStringPiece(pattern));
+			    if (!re.ok()) {
+				    throw InvalidInputException(re.error());
+			    }
+			    return ExtractCaptureGroup(input, re, info.group_index, info.no_match_returns_input);
 		    });
 	}
 }

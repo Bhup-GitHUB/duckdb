@@ -131,7 +131,8 @@ BoundStatement Binder::Bind(ExecuteStatement &stmt) {
 	}
 	optional<Identifier> replaces;
 	if (rebind != RebindQueryInfo::ATTEMPT_TO_REBIND &&
-	    (!prepared->CatalogIsCurrent(context) || !prepared->DataIsCurrent(context))) {
+	    (!prepared->CatalogIsCurrent(context) || !prepared->DataIsCurrent(context) ||
+	     !prepared->SecurityIsCurrent(context))) {
 		Planner generic_planner(context);
 		generic_planner.parameter_type_hints = prepared->parameter_type_hints;
 		auto replanned = generic_planner.PrepareSQLStatement(prepared->unbound_statement->Copy());

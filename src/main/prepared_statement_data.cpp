@@ -5,6 +5,7 @@
 #include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/client_config.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/main/prepared_statement.hpp"
 #include "duckdb/transaction/transaction.hpp"
@@ -150,6 +151,10 @@ bool PreparedStatementData::CatalogIsCurrent(ClientContext &context) const {
 		}
 	}
 	return true;
+}
+
+bool PreparedStatementData::SecurityIsCurrent(ClientContext &context) const {
+	return context.security == security && context.principal_role == principal_role;
 }
 
 bool PreparedStatementData::DataIsCurrent(ClientContext &context) const {

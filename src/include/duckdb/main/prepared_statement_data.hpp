@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/catalog/permissions.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/enums/statement_type.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -50,6 +51,8 @@ public:
 	timestamp_tz_t prepare_time = timestamp_tz_t::epoch();
 	idx_t generic_plans = 0;
 	idx_t custom_plans = 0;
+	shared_ptr<const SecuritySnapshot> security;
+	idx_t principal_role = DConstants::INVALID_INDEX;
 
 public:
 	void CheckParameterCount(idx_t parameter_count);
@@ -57,6 +60,7 @@ public:
 	bool RequireRebind(ClientContext &context, optional_ptr<identifier_map_t<BoundParameterData>> values);
 	bool CatalogIsCurrent(ClientContext &context) const;
 	bool DataIsCurrent(ClientContext &context) const;
+	bool SecurityIsCurrent(ClientContext &context) const;
 	//! Fill in missing parameter values from user variables
 	void PopulateMissingParameterValues(ClientContext &context, identifier_map_t<BoundParameterData> &values) const;
 	//! Bind a set of values to the prepared statement data

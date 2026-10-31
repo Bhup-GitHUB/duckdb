@@ -2,6 +2,7 @@
 
 #include <absl/cleanup/cleanup.h>
 
+#include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_search_path.hpp"
@@ -1022,6 +1023,13 @@ static absl::Duration TimeLeft(const optional_idx &deadline) {
 	}
 	auto left = static_cast<int64_t>(deadline.GetIndex()) - TimePoint::Now();
 	return absl::Nanoseconds(TimePoint::ToNanos(left));
+}
+
+void ClientContext::CheckDatabaseReference(Catalog &catalog) {
+	if (entry_reference_handler && !catalog.IsSystemCatalog() && !catalog.IsTemporaryCatalog() &&
+	    catalog.GetName() != client_data->default_database) {
+		entry_reference_handler(*this, catalog.GetAttached());
+	}
 }
 
 void ClientContext::ResolvePrincipal() {

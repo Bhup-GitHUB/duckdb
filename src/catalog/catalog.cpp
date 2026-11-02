@@ -438,6 +438,10 @@ void Catalog::DropForeignServer(CatalogTransaction transaction, DropInfo &info) 
 	throw NotImplementedException("DROP SERVER is not supported by a %s catalog", GetCatalogType());
 }
 
+void Catalog::DropSubscription(CatalogTransaction transaction, DropInfo &info) {
+	throw NotImplementedException("DROP SUBSCRIPTION is not supported by a %s catalog", GetCatalogType());
+}
+
 bool Catalog::SupportsPushdown(const ParsedExpression &expression) {
 	return true;
 }
@@ -545,6 +549,10 @@ void Catalog::DropEntry(ClientContext &context, DropInfo &info) {
 	}
 	if (info.type == CatalogType::FOREIGN_SERVER_ENTRY) {
 		DropForeignServer(GetCatalogTransaction(context), info);
+		return;
+	}
+	if (info.type == CatalogType::SUBSCRIPTION_ENTRY) {
+		DropSubscription(GetCatalogTransaction(context), info);
 		return;
 	}
 
@@ -1953,6 +1961,11 @@ void Catalog::AlterSchemaEntry(CatalogTransaction transaction, SchemaCatalogEntr
 }
 
 void Catalog::Alter(CatalogTransaction transaction, AlterInfo &info) {
+	if (info.type == AlterType::REASSIGN_OWNED || info.type == AlterType::DROP_OWNED) {
+		throw NotImplementedException("%s is not supported by a %s catalog",
+		                              info.type == AlterType::REASSIGN_OWNED ? "REASSIGN OWNED" : "DROP OWNED",
+		                              GetCatalogType());
+	}
 	if (info.type == AlterType::ALTER_SCHEMA) {
 		auto &schema_info = info.Cast<AlterSchemaInfo>();
 		auto schema = GetSchema(transaction, schema_info.SchemaPath(), info.if_not_found);

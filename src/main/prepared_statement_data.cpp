@@ -154,7 +154,7 @@ bool PreparedStatementData::CatalogIsCurrent(ClientContext &context) const {
 }
 
 bool PreparedStatementData::SecurityIsCurrent(ClientContext &context) const {
-	return context.security == security && context.principal_role == principal_role;
+	return context.security == security && context.current_role_id == principal_role;
 }
 
 bool PreparedStatementData::DataIsCurrent(ClientContext &context) const {

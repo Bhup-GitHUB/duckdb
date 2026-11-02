@@ -22,7 +22,8 @@ static bool CanResetAt(const ExtensionOption &option, SetScope effective_scope) 
 }
 
 void PhysicalReset::ResetExtensionVariable(ExecutionContext &context, DBConfig &config, const Identifier &name,
-                                           ExtensionOption &extension_option, SetScope effective_scope) {
+                                           ExtensionOption &extension_option, SetScope effective_scope,
+                                           bool reset_all) {
 	// Compatibility: mirror the checks from PhysicalSet::SetExtensionVariable.
 	if (!CanResetAt(extension_option, effective_scope)) {
 		throw InvalidInputException("parameter \"%s\" cannot be reset locally", extension_option.description);
@@ -44,7 +45,7 @@ void PhysicalReset::ResetExtensionVariable(ExecutionContext &context, DBConfig &
 
 	// The rollback observer only needs to see real changes; gate it with
 	// is_user_set so RESET ALL no-ops don't reach the sdb tracker.
-	context.client.OnSettingChange(name.GetIdentifierName(), effective_scope);
+	context.client.OnSettingChange(name.GetIdentifierName(), effective_scope, reset_all);
 
 	if (extension_option.reset_function) {
 		extension_option.reset_function(context.client, effective_scope);
@@ -59,7 +60,7 @@ void PhysicalReset::ResetExtensionVariable(ExecutionContext &context, DBConfig &
 }
 
 void PhysicalReset::ResetOption(ExecutionContext &context, DBConfig &config, const ConfigurationOption &option,
-                                const char *name, SetScope variable_scope) {
+                                const char *name, SetScope variable_scope, bool reset_all) {
 	config.CheckLock(option.name);
 
 	if (option.default_value) {
@@ -73,7 +74,7 @@ void PhysicalReset::ResetOption(ExecutionContext &context, DBConfig &config, con
 		}
 		// Gate the rollback observer on is_user_set so RESET ALL no-ops don't
 		// reach the sdb tracker.
-		context.client.OnSettingChange(name, variable_scope);
+		context.client.OnSettingChange(name, variable_scope, reset_all);
 		if (option.set_callback) {
 			SettingCallbackInfo info(context.client, variable_scope);
 			info.is_reset = true;
@@ -93,7 +94,7 @@ void PhysicalReset::ResetOption(ExecutionContext &context, DBConfig &config, con
 		if (!option.set_global) {
 			throw CatalogException("option \"%s\" cannot be reset globally", option.name);
 		}
-		context.client.OnSettingChange(name, variable_scope);
+		context.client.OnSettingChange(name, variable_scope, reset_all);
 		auto &db = DatabaseInstance::GetDatabase(context.client);
 		config.ResetOption(&db, option);
 		break;
@@ -113,7 +114,7 @@ void PhysicalReset::ResetOption(ExecutionContext &context, DBConfig &config, con
 		const bool had_post = context.client.TryGetCurrentSetting(option.name, post_value);
 		const bool changed = had_pre != had_post || !Value::NotDistinctFrom(pre_value, post_value);
 		if (changed) {
-			context.client.OnSettingChange(name, variable_scope);
+			context.client.OnSettingChange(name, variable_scope, reset_all);
 		}
 		break;
 	}
@@ -149,7 +150,7 @@ SourceResultType PhysicalReset::GetDataInternal(ExecutionContext &context, DataC
 	auto option = DBConfig::GetOptionByName(option_name);
 	if (option) {
 		ResetOption(context, config, *option, option_name.GetIdentifierName().c_str(),
-		            PhysicalSet::GetSettingScope(*option, scope));
+		            PhysicalSet::GetSettingScope(*option, scope), false);
 		return SourceResultType::FINISHED;
 	}
 	ExtensionOption extension_option;
@@ -160,7 +161,7 @@ SourceResultType PhysicalReset::GetDataInternal(ExecutionContext &context, DataC
 		}
 	}
 	ResetExtensionVariable(context, config, option_name, extension_option,
-	                       PhysicalSet::GetSettingScope(extension_option, scope));
+	                       PhysicalSet::GetSettingScope(extension_option, scope), false);
 	return SourceResultType::FINISHED;
 }
 
@@ -179,14 +180,14 @@ void PhysicalReset::ResetAll(ExecutionContext &context, SetScope scope) {
 		if (variable_scope == SetScope::GLOBAL) {
 			continue;
 		}
-		ResetOption(context, config, *option, option->name, variable_scope);
+		ResetOption(context, config, *option, option->name, variable_scope, true);
 	}
 	for (auto &ext : config.GetExtensionSettings()) {
 		auto variable_scope = PhysicalSet::GetSettingScope(ext.second, scope);
 		if (ext.second.no_reset_all || variable_scope == SetScope::GLOBAL || !CanResetAt(ext.second, variable_scope)) {
 			continue;
 		}
-		ResetExtensionVariable(context, config, ext.first, ext.second, variable_scope);
+		ResetExtensionVariable(context, config, ext.first, ext.second, variable_scope, true);
 	}
 }
 

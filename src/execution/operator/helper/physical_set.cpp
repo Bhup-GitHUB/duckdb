@@ -57,13 +57,13 @@ void PhysicalSet::SetVariable(ClientContext &context, const Identifier &name, Se
 		// Invoke the pre-SET observer after resolution so the handler only sees
 		// valid option names and can safely snapshot the current value.
 		Value casted_value = value.CastAs(context, extension_option.type);
-		context.OnSettingChange(name.GetIdentifierName(), scope);
+		context.OnSettingChange(name.GetIdentifierName(), scope, false);
 		SetExtensionVariable(context, extension_option, name, scope, casted_value);
 		return;
 	}
 	SetScope variable_scope = GetSettingScope(*option, scope);
 	Value input_val = value.CastAs(context, DBConfig::ParseLogicalType(option->parameter_type));
-	context.OnSettingChange(name.GetIdentifierName(), scope);
+	context.OnSettingChange(name.GetIdentifierName(), scope, false);
 	if (option->default_value) {
 		if (option->set_callback) {
 			SettingCallbackInfo info(context, variable_scope);

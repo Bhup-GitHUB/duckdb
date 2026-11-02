@@ -6,6 +6,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/main/settings.hpp"
 
 namespace duckdb {
 
@@ -32,6 +33,9 @@ void PhysicalReset::ResetExtensionVariable(ExecutionContext &context, DBConfig &
 		throw InvalidInputException("parameter \"%s\" is global and cannot be reset inside a transaction",
 		                            extension_option.description);
 	}
+	if (!reset_all) {
+		Settings::CheckChange(context.client, name, extension_option.access, effective_scope);
+	}
 
 	// RESET on an option the user never SET is a no-op — don't reapply the
 	// default via set_function, which would needlessly trigger side-effect
@@ -45,7 +49,7 @@ void PhysicalReset::ResetExtensionVariable(ExecutionContext &context, DBConfig &
 
 	// The rollback observer only needs to see real changes; gate it with
 	// is_user_set so RESET ALL no-ops don't reach the sdb tracker.
-	context.client.OnSettingChange(name.GetIdentifierName(), effective_scope, reset_all);
+	context.client.OnSettingChange(name.GetIdentifierName(), effective_scope);
 
 	if (extension_option.reset_function) {
 		extension_option.reset_function(context.client, effective_scope);
@@ -62,6 +66,9 @@ void PhysicalReset::ResetExtensionVariable(ExecutionContext &context, DBConfig &
 void PhysicalReset::ResetOption(ExecutionContext &context, DBConfig &config, const ConfigurationOption &option,
                                 const char *name, SetScope variable_scope, bool reset_all) {
 	config.CheckLock(option.name);
+	if (!reset_all) {
+		Settings::CheckChange(context.client, Identifier(name), option.access, variable_scope);
+	}
 
 	if (option.default_value) {
 		// RESET on an untouched generic option is a no-op — don't fire
@@ -74,7 +81,7 @@ void PhysicalReset::ResetOption(ExecutionContext &context, DBConfig &config, con
 		}
 		// Gate the rollback observer on is_user_set so RESET ALL no-ops don't
 		// reach the sdb tracker.
-		context.client.OnSettingChange(name, variable_scope, reset_all);
+		context.client.OnSettingChange(name, variable_scope);
 		if (option.set_callback) {
 			SettingCallbackInfo info(context.client, variable_scope);
 			info.is_reset = true;
@@ -94,7 +101,7 @@ void PhysicalReset::ResetOption(ExecutionContext &context, DBConfig &config, con
 		if (!option.set_global) {
 			throw CatalogException("option \"%s\" cannot be reset globally", option.name);
 		}
-		context.client.OnSettingChange(name, variable_scope, reset_all);
+		context.client.OnSettingChange(name, variable_scope);
 		auto &db = DatabaseInstance::GetDatabase(context.client);
 		config.ResetOption(&db, option);
 		break;
@@ -114,7 +121,7 @@ void PhysicalReset::ResetOption(ExecutionContext &context, DBConfig &config, con
 		const bool had_post = context.client.TryGetCurrentSetting(option.name, post_value);
 		const bool changed = had_pre != had_post || !Value::NotDistinctFrom(pre_value, post_value);
 		if (changed) {
-			context.client.OnSettingChange(name, variable_scope, reset_all);
+			context.client.OnSettingChange(name, variable_scope);
 		}
 		break;
 	}

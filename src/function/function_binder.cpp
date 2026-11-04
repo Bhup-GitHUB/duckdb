@@ -4,6 +4,7 @@
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/window_function_catalog_entry.hpp"
+#include "duckdb/catalog/permissions.hpp"
 #include "duckdb/common/limits.hpp"
 #include "duckdb/common/type_visitor.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -906,6 +907,7 @@ unique_ptr<Expression> FunctionBinder::BindScalarFunction(const ScalarFunctionCa
 	}
 
 	// found a matching function!
+	CheckBuiltinCall(context, binder ? binder->CurrentRole() : context.CurrentRole(), func, best_function.GetIndex());
 	auto selected_function = func.functions.GetFunctionByOffset(best_function.GetIndex());
 	auto &bound_function = *selected_function;
 
@@ -1658,6 +1660,7 @@ FunctionBinder::BindAggregateFunction(const AggregateFunctionCatalogEntry &func,
 	}
 
 	// found a matching function!
+	CheckBuiltinCall(context, binder ? binder->CurrentRole() : context.CurrentRole(), func, best_function.GetIndex());
 	auto bound_function = func.functions.GetFunctionByOffset(best_function.GetIndex());
 
 	// now that the overload is fixed, split the arguments into their final positional/named children
@@ -1759,6 +1762,7 @@ FunctionBinder::BindWindowFunction(const WindowFunctionCatalogEntry &func,
 	}
 
 	// found a matching function!
+	CheckBuiltinCall(context, binder ? binder->CurrentRole() : context.CurrentRole(), func, best_function.GetIndex());
 	auto bound_function = func.functions.GetFunctionByOffset(best_function.GetIndex());
 
 	// now that the overload is fixed, split the arguments into their final positional/named children

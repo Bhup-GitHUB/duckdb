@@ -42,7 +42,7 @@ public:
 	void Arrived();
 	shared_ptr<SchedulerAccount> Select() DUCKDB_REQUIRES(lock);
 	void Refresh() DUCKDB_REQUIRES(lock);
-	void Leave(SchedulerAccount &account);
+	bool Leave(SchedulerAccount &account);
 	bool Unclaim(SchedulerAccount &account);
 	void Detach(SchedulerAccount &account);
 	void Attach(SchedulerAccount &account);

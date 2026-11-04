@@ -1,6 +1,7 @@
 #include "duckdb/parallel/task_scheduler.hpp"
 
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/fault_points.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/time_point.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -150,7 +151,7 @@ void TaskScheduler::ScheduleTask(ProducerToken &token, shared_ptr<Task> task) {
 	ScheduleTask(token, std::move(task), TaskSchedulerType::REGULAR);
 }
 
-void TaskScheduler::ScheduleTasks(ProducerToken &producer, vector<shared_ptr<Task>> &tasks) {
+void TaskScheduler::ScheduleTasks(ProducerToken &producer, std::span<shared_ptr<Task>> tasks) {
 	ScheduleTasks(producer, tasks, TaskSchedulerType::REGULAR);
 }
 
@@ -158,14 +159,17 @@ void TaskScheduler::ScheduleTask(ProducerToken &token, shared_ptr<Task> task, Ta
 	Enqueue(token, &task, 1, pool_type, true);
 }
 
-void TaskScheduler::ScheduleTasks(ProducerToken &producer, vector<shared_ptr<Task>> &tasks,
+void TaskScheduler::ScheduleTasks(ProducerToken &producer, std::span<shared_ptr<Task>> tasks,
                                   TaskSchedulerType pool_type) {
 	Enqueue(producer, tasks.data(), tasks.size(), pool_type, true);
 }
 
-void TaskScheduler::ScheduleConcurrentTask(ProducerToken &producer, shared_ptr<Task> task,
-                                           TaskSchedulerType pool_type) {
-	Enqueue(producer, &task, 1, pool_type, false);
+void TaskScheduler::ScheduleConcurrentTask(ProducerToken &producer, shared_ptr<Task> task) {
+	Enqueue(producer, &task, 1, TaskSchedulerType::REGULAR, false);
+}
+
+void TaskScheduler::ScheduleConcurrentTasks(ProducerToken &producer, std::span<shared_ptr<Task>> tasks) {
+	Enqueue(producer, tasks.data(), tasks.size(), TaskSchedulerType::REGULAR, false);
 }
 
 void TaskScheduler::Enqueue(ProducerToken &producer, shared_ptr<Task> *tasks, idx_t count, TaskSchedulerType pool_type,
@@ -191,6 +195,9 @@ void TaskScheduler::Enqueue(ProducerToken &producer, shared_ptr<Task> *tasks, id
 	}
 	if (activated) {
 		queue.Publish(*account);
+	}
+	SDB_IF_FAILURE("scheduler_enqueue_finds_no_free_slot") {
+		return;
 	}
 	if (!keep_claim) {
 		Wake(count, account.get());
@@ -294,10 +301,12 @@ void TaskScheduler::Leave(SchedulerWorker &worker) {
 		return;
 	}
 	queue.Charge(*worker.account, TimePoint::ToNanos(worker.bound_used));
-	queue.Leave(*worker.account);
-	worker.account.reset();
+	const auto account = std::move(worker.account);
 	worker.bound_used = 0;
 	worker.rotate = false;
+	if (queue.Leave(*account)) {
+		Wake(1, account.get());
+	}
 }
 
 bool TaskScheduler::Rebind(SchedulerWorker &worker) {
@@ -491,11 +500,6 @@ bool TaskScheduler::ClearIdle(idx_t index) {
 }
 
 bool TaskScheduler::ClaimIdle(idx_t &index) {
-	const auto hint = last_idle.load(std::memory_order_relaxed);
-	if (ClearIdle(hint)) {
-		index = hint;
-		return true;
-	}
 	for (idx_t word = 0; word < WORKER_WORDS; word++) {
 		auto bits = idle_bits[word].load(std::memory_order_relaxed);
 		while (bits) {
@@ -520,7 +524,6 @@ bool TaskScheduler::Park(SchedulerWorker &worker) {
 	}
 	idle_bits[worker.index / 64].fetch_or(uint64_t(1) << (worker.index % 64), std::memory_order_seq_cst);
 	idle_count.fetch_add(1, std::memory_order_seq_cst);
-	last_idle.store(worker.index, std::memory_order_relaxed);
 	const auto busy = running.load(std::memory_order_relaxed) + waking.load(std::memory_order_relaxed);
 	if (queue.HasQueuedTasks() && busy < target.load(std::memory_order_relaxed)) {
 		if (ClearIdle(worker.index)) {
@@ -540,6 +543,7 @@ bool TaskScheduler::Park(SchedulerWorker &worker) {
 		}
 		worker.semaphore.wait();
 	}
+	SDB_PARK_ONCE_ON_FAILURE("scheduler_woken_worker_pauses");
 	worker.woken.store(false, std::memory_order_relaxed);
 	waking.fetch_sub(1, std::memory_order_relaxed);
 	return true;
@@ -673,11 +677,15 @@ idx_t TaskScheduler::ExecuteTasks(atomic<bool> *marker, idx_t max_tasks) {
 			return completed_tasks;
 		}
 		if (!queue.Dequeue(*account, task)) {
-			queue.Leave(*account);
+			if (queue.Leave(*account)) {
+				Wake(1, account.get());
+			}
 			return completed_tasks;
 		}
 		auto execute_result = task->Execute(TaskExecutionMode::PROCESS_ALL);
-		queue.Leave(*account);
+		if (queue.Leave(*account)) {
+			Wake(1, account.get());
+		}
 
 		switch (execute_result) {
 		case TaskExecutionResult::TASK_FINISHED:

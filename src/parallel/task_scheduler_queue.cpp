@@ -259,15 +259,17 @@ bool TaskSchedulerQueue::Unlist(SchedulerAccount &account) {
 	       !account.listed.exchange(true, std::memory_order_seq_cst);
 }
 
-void TaskSchedulerQueue::Leave(SchedulerAccount &account) {
+bool TaskSchedulerQueue::Leave(SchedulerAccount &account) {
 	account.bound.fetch_sub(1, std::memory_order_relaxed);
 	if (!account.claimed.exchange(false, std::memory_order_seq_cst)) {
 		Rekey(account);
-		return;
+		return false;
 	}
 	if (account.queued_tasks.load(std::memory_order_seq_cst) > 0 || Unlist(account)) {
 		Publish(account);
+		return true;
 	}
+	return false;
 }
 
 bool TaskSchedulerQueue::Unclaim(SchedulerAccount &account) {

@@ -265,6 +265,7 @@ unique_ptr<AlterInfo> AlterRoleInfo::Copy() const {
 	result->set_option = set_option;
 	result->grant_role_id = grant_role_id;
 	result->grantor_id = grantor_id;
+	result->all_roles = all_roles;
 	result->alter_group = alter_group;
 	return std::move(result);
 }
@@ -273,6 +274,9 @@ string AlterRoleInfo::ToString() const {
 	if (!grant_role.empty()) {
 		return string(revoke ? "REVOKE " : "GRANT ") + grant_role + (revoke ? " FROM " : " TO ") +
 		       GetQualifiedName().Name().GetIdentifierName() + ";";
+	}
+	if (all_roles) {
+		return "ALTER ROLE ALL;";
 	}
 	return "ALTER ROLE " + GetQualifiedName().Name().GetIdentifierName() + ";";
 }

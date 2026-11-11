@@ -330,7 +330,8 @@ BoundStatement Binder::Bind(AlterStatement &stmt) {
 
 	BindAlterTypes(*type_binder, stmt);
 	if (catalog.Compatibility() == SqlCompatibility::POSTGRES) {
-		QualifyAlterUserFunctions(*type_binder, entry->ParentSchema(context), stmt);
+		auto &schema = entry->ParentSchema(context);
+		QualifyAlterUserFunctions(*this, schema, stmt);
 	}
 
 	if (catalog.IsSystemCatalog()) {

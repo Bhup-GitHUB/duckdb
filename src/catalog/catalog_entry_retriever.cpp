@@ -127,6 +127,16 @@ void CatalogEntryRetriever::SetSearchPath(vector<CatalogSearchEntry> entries) {
 	this->search_path = make_shared_ptr<CatalogSearchPath>(context, std::move(new_path));
 }
 
+void CatalogEntryRetriever::SetTableSearchPath(const SchemaCatalogEntry &schema) {
+	auto &catalog = schema.ParentCatalog();
+	if (catalog.Compatibility() != SqlCompatibility::POSTGRES || catalog.IsTemporaryCatalog()) {
+		SetSearchPath({CatalogSearchEntry(catalog.GetName(), schema.name)});
+		return;
+	}
+	D_ASSERT(!catalog.IsSystemCatalog());
+	this->search_path = CatalogSearchPath::ForTable(context, schema);
+}
+
 optional_ptr<BoundAtClause> CatalogEntryRetriever::GetAtClause() const {
 	return at_clause;
 }

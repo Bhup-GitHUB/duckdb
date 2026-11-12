@@ -2,6 +2,7 @@
 #include "duckdb/catalog/default/default_schemas.hpp"
 
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/sql_identifier.hpp"
@@ -154,6 +155,34 @@ vector<CatalogSearchEntry> CatalogSearchEntry::ParseList(const string &input) {
 CatalogSearchPath::CatalogSearchPath(ClientContext &context_p, vector<CatalogSearchEntry> entries)
     : context(context_p) {
 	SetPathsInternal(std::move(entries));
+}
+
+shared_ptr<CatalogSearchPath> CatalogSearchPath::ForTable(ClientContext &context, const SchemaCatalogEntry &schema) {
+	// pg_catalog, the table's schema, the database's default schema and any schema of the table's database
+	static constexpr idx_t MAX_TABLE_PATH_SIZE = 4;
+	auto &catalog = schema.ParentCatalog();
+	auto &catalog_name = catalog.GetName();
+	auto default_schema = catalog.GetDefaultSchema();
+	D_ASSERT(default_schema);
+	const bool is_nested = !schema.GetParentSchemaPath().empty();
+	const bool is_default_schema = !is_nested && schema.name == *default_schema;
+
+	vector<CatalogSearchEntry> paths;
+	paths.reserve(MAX_TABLE_PATH_SIZE);
+	// built-ins first, so an object created later in the table's schema can't shadow one
+	paths.emplace_back(catalog_name, "pg_catalog");
+	if (!is_nested) {
+		paths.emplace_back(catalog_name, schema.name);
+	}
+	if (!is_default_schema) {
+		paths.emplace_back(catalog_name, *default_schema);
+	}
+	// a schema-qualified name without a database resolves in the table's database
+	paths.emplace_back(catalog_name, INVALID_SCHEMA);
+
+	auto result = make_shared_ptr<CatalogSearchPath>(context, vector<CatalogSearchEntry>());
+	result->paths = std::move(paths);
+	return result;
 }
 
 CatalogSearchPath::CatalogSearchPath(ClientContext &context_p)

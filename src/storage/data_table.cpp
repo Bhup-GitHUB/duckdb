@@ -832,7 +832,7 @@ static void VerifyGeneratedColumns(ClientContext &context, const TableCatalogEnt
 		return;
 	}
 	// Verify the generated columns against the inserted values.
-	auto binder = Binder::CreateBinder(context);
+	auto binder = Binder::CreateTableBinder(context, table.ParentSchema(context));
 	physical_index_set_t bound_columns;
 	CheckBinder generated_check_binder(*binder, context, table.name, table.GetColumns(), bound_columns);
 	for (auto &col : table.GetColumns().Logical()) {

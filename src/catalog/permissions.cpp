@@ -1426,6 +1426,12 @@ void ThrowPermissionDenied(const CatalogEntry &entry) {
 	throw PermissionException("permission denied for %s %s", PermissionKindName(entry), entry.name.GetIdentifierName());
 }
 
+void RequireEntryPrivilege(const RoleAccess &role, const CatalogEntry &entry, AclMode any) {
+	if (!role.CanAny(Permissions::AclClass(entry.type), entry.permissions, any)) {
+		ThrowPermissionDenied(entry);
+	}
+}
+
 void RequireSuperuser(const RoleAccess &role) {
 	if (!role.is_superuser) {
 		throw PermissionException("permission denied: superuser required");
@@ -1571,9 +1577,8 @@ void RequireDatabasePrivilege(ClientContext &context, const RoleAccess &role, co
 	if (role.is_superuser) {
 		return;
 	}
-	auto entry = ClusterEntry(context, CatalogType::DATABASE_ENTRY, database);
-	if (entry && !role.Can(CatalogType::DATABASE_ENTRY, entry->permissions, need)) {
-		ThrowPermissionDenied(*entry);
+	if (auto entry = ClusterEntry(context, CatalogType::DATABASE_ENTRY, database)) {
+		RequireEntryPrivilege(role, *entry, need);
 	}
 }
 
@@ -1633,9 +1638,7 @@ void RequireSchemaCreate(ClientContext &context, const RoleAccess &role, SchemaC
 		}
 		return;
 	}
-	if (!role.Can(CatalogType::SCHEMA_ENTRY, schema.permissions, AclMode::Create)) {
-		ThrowPermissionDenied(schema);
-	}
+	RequireEntryPrivilege(role, schema, AclMode::Create);
 }
 
 void RequireTypeUsage(ClientContext &context, const RoleAccess &role, const LogicalType &type, Catalog &catalog) {
@@ -1651,9 +1654,8 @@ void RequireTypeUsage(ClientContext &context, const RoleAccess &role, const Logi
 		auto oid = extension->properties.find(ExtensionTypeInfo::CATALOG_OID_PROPERTY);
 		if (oid != extension->properties.end()) {
 			auto entry = catalog.LookupOwner(catalog.GetCatalogTransaction(context), oid->second.GetValue<idx_t>());
-			if (entry && entry->type == CatalogType::TYPE_ENTRY && !IsUnowned(*entry) &&
-			    !role.Can(CatalogType::TYPE_ENTRY, entry->permissions, AclMode::Usage)) {
-				ThrowPermissionDenied(*entry);
+			if (entry && entry->type == CatalogType::TYPE_ENTRY && !IsUnowned(*entry)) {
+				RequireEntryPrivilege(role, *entry, AclMode::Usage);
 			}
 			return;
 		}

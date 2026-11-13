@@ -574,7 +574,7 @@ ReassignOwnedInfo::ReassignOwnedInfo() : AlterInfo(AlterType::REASSIGN_OWNED) {
 }
 
 CatalogType ReassignOwnedInfo::GetCatalogType() const {
-	return CatalogType::ROLE_ENTRY;
+	return CatalogType::INVALID;
 }
 
 unique_ptr<AlterInfo> ReassignOwnedInfo::Copy() const {
@@ -596,7 +596,7 @@ DropOwnedInfo::DropOwnedInfo() : AlterInfo(AlterType::DROP_OWNED) {
 }
 
 CatalogType DropOwnedInfo::GetCatalogType() const {
-	return CatalogType::ROLE_ENTRY;
+	return CatalogType::INVALID;
 }
 
 unique_ptr<AlterInfo> DropOwnedInfo::Copy() const {

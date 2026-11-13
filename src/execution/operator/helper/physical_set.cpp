@@ -43,9 +43,7 @@ void PhysicalSet::SetCustomVariable(ClientContext &context, const Identifier &na
 		throw CatalogException("option %s cannot be set globally", name);
 	}
 	Value text(value.IsNull() ? string() : value.ToString());
-	if (context.setting_change_handler) {
-		context.setting_change_handler(context, name.GetIdentifierName(), scope);
-	}
+	context.OnSettingChange(name.GetIdentifierName(), scope);
 	ClientConfig::GetConfig(context).custom_settings[name.GetIdentifierName()] = std::move(text);
 }
 

@@ -608,11 +608,7 @@ void DisabledOptimizersSetting::ResetLocal(ClientContext &context) {
 	config.has_disabled_optimizers = false;
 }
 
-Value DisabledOptimizersSetting::GetSetting(const ClientContext &context) {
-	auto &client_config = ClientConfig::GetConfig(context);
-	auto &config = DBConfig::GetConfig(context);
-	auto &disabled =
-	    client_config.has_disabled_optimizers ? client_config.disabled_optimizers : config.options.disabled_optimizers;
+static Value DisabledOptimizersValue(const set<OptimizerType> &disabled) {
 	string result;
 	for (auto &optimizer : disabled) {
 		if (!result.empty()) {
@@ -621,6 +617,22 @@ Value DisabledOptimizersSetting::GetSetting(const ClientContext &context) {
 		result += OptimizerTypeToString(optimizer);
 	}
 	return Value(result);
+}
+
+Value DisabledOptimizersSetting::GetSetting(const ClientContext &context) {
+	auto disabled = GetLocal(context);
+	if (!disabled.IsNull()) {
+		return disabled;
+	}
+	return DisabledOptimizersValue(DBConfig::GetConfig(context).options.disabled_optimizers);
+}
+
+Value DisabledOptimizersSetting::GetLocal(const ClientContext &context) {
+	auto &client_config = ClientConfig::GetConfig(context);
+	if (!client_config.has_disabled_optimizers) {
+		return Value();
+	}
+	return DisabledOptimizersValue(client_config.disabled_optimizers);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1740,12 +1752,20 @@ void ThreadsSetting::ResetLocal(ClientContext &context) {
 }
 
 Value ThreadsSetting::GetSetting(const ClientContext &context) {
-	auto &threads = ClientConfig::GetConfig(context).threads;
-	if (threads.IsValid()) {
-		return Value::BIGINT(NumericCast<int64_t>(threads.GetIndex()));
+	auto threads = GetLocal(context);
+	if (!threads.IsNull()) {
+		return threads;
 	}
 	auto &config = DBConfig::GetConfig(context);
 	return Value::BIGINT(NumericCast<int64_t>(config.options.maximum_threads));
+}
+
+Value ThreadsSetting::GetLocal(const ClientContext &context) {
+	auto &threads = ClientConfig::GetConfig(context).threads;
+	if (!threads.IsValid()) {
+		return Value();
+	}
+	return Value::BIGINT(NumericCast<int64_t>(threads.GetIndex()));
 }
 
 //===----------------------------------------------------------------------===//

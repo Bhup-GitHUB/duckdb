@@ -91,6 +91,7 @@ struct ConfigurationOption {
 	reset_global_function_t reset_global;
 	reset_local_function_t reset_local;
 	get_setting_function_t get_setting;
+	get_setting_function_t get_local;
 	SettingScopeTarget scope;
 	const char *default_value;
 	set_callback_t set_callback;

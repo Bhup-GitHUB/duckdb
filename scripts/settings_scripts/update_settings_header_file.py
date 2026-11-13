@@ -47,6 +47,8 @@ def extract_declarations(setting) -> str:
                 definition += f"static bool OnLocalReset(ClientContext &context);\n"
         if setting.scope is not None:
             definition += f"    static Value GetSetting(const ClientContext &context);\n"
+        if setting.scope == "GLOBAL_LOCAL":
+            definition += f"    static Value GetLocal(const ClientContext &context);\n"
     if setting.is_generic_setting:
         if setting.conditional_defaults is not None:
             for condition, default_val in setting.conditional_defaults.items():

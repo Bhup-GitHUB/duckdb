@@ -93,7 +93,7 @@ SELECT regexp_matches('foobarbequebaz', '(bar)(beque)')
 statement error
 SELECT regexp_matches('', '\X')
 ----
-<REGEX>:.*Invalid Input Error: invalid escape sequence.*
+<REGEX>:.*Invalid Input Error: invalid regular expression: invalid escape sequence.*
 
 statement ok
 CREATE TABLE regex(s STRING, p STRING)

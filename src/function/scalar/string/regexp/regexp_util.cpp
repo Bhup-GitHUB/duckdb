@@ -108,7 +108,7 @@ void ParseGroupNameList(const string &function_name, const Value &list_val, cons
 		RE2 constant_re(const_piece, options);
 		auto group_cnt = constant_re.NumberOfCapturingGroups();
 		if (group_cnt == -1) {
-			throw BinderException("Pattern failed to parse: %s", constant_re.error());
+			ThrowPatternError(constant_re);
 		}
 		if ((idx_t)group_cnt < out_names.size()) {
 			throw BinderException("Not enough capturing groups (%d) for provided names (%llu)", group_cnt,
@@ -149,6 +149,11 @@ void VerifyUTF8Result(const char *data, idx_t size) {
 	}
 }
 
+void ThrowPatternError(const duckdb_re2::RE2 &pattern) {
+	throw InvalidInputException(Exception::InitializeExtraInfo("INVALID_REGULAR_EXPRESSION", optional_idx()),
+	                            "invalid regular expression: " + pattern.error());
+}
+
 } // namespace regexp_util
 
 RegexPatternCache::RegexPatternCache(duckdb_re2::RE2::Options options_p) : options(std::move(options_p)) {
@@ -169,6 +174,9 @@ duckdb_re2::RE2 &RegexPatternCache::Get(duckdb_re2::StringPiece pattern) {
 		}
 	}
 	auto re = make_uniq<duckdb_re2::RE2>(pattern, options);
+	if (!re->ok()) {
+		regexp_util::ThrowPatternError(*re);
+	}
 	string key(pattern.data(), pattern.size());
 	if (entries.size() < CAPACITY) {
 		entries.emplace_back(std::move(key), std::move(re));

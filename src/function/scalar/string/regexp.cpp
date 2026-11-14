@@ -82,7 +82,7 @@ RegexpMatchesBindData::RegexpMatchesBindData(duckdb_re2::RE2::Options options, s
 	if (constant_pattern) {
 		auto pattern = make_uniq<RE2>(constant_string, options);
 		if (!pattern->ok()) {
-			throw InvalidInputException(pattern->error());
+			regexp_util::ThrowPatternError(*pattern);
 		}
 
 		range_success = pattern->PossibleMatchRange(&range_min, &range_max, 1000);
@@ -148,14 +148,10 @@ static void RegexpMatchesFunction(DataChunk &args, ExpressionState &state, Vecto
 		});
 	} else {
 		auto &cache = ExecuteFunctionState::GetFunctionState(state)->Cast<RegexPatternCacheState>().cache;
-		BinaryExecutor::Execute<string_t, string_t, bool>(strings, patterns, result,
-		                                                  [&](string_t input, string_t pattern) {
-			                                                  auto &re = cache.Get(CreateStringPiece(pattern));
-			                                                  if (!re.ok()) {
-				                                                  throw InvalidInputException(re.error());
-			                                                  }
-			                                                  return OP::Operation(CreateStringPiece(input), re);
-		                                                  });
+		BinaryExecutor::Execute<string_t, string_t, bool>(
+		    strings, patterns, result, [&](string_t input, string_t pattern) {
+			    return OP::Operation(CreateStringPiece(input), cache.Get(CreateStringPiece(pattern)));
+		    });
 	}
 }
 
@@ -375,11 +371,7 @@ static void RegexReplaceFunction(DataChunk &args, ExpressionState &state, Vector
 		auto &cache = ExecuteFunctionState::GetFunctionState(state)->Cast<RegexPatternCacheState>().cache;
 		TernaryExecutor::Execute<string_t, string_t, string_t, string_t>(
 		    strings, patterns, replaces, result, [&](string_t input, string_t pattern, string_t replace) {
-			    auto &re = cache.Get(CreateStringPiece(pattern));
-			    if (!re.ok()) {
-				    throw InvalidInputException(re.error());
-			    }
-			    return replace_row(input, re, replace);
+			    return replace_row(input, cache.Get(CreateStringPiece(pattern)), replace);
 		    });
 	}
 	StringVector::AddHeapReference(result, strings);
@@ -429,11 +421,8 @@ static void RegexExtractFunction(DataChunk &args, ExpressionState &state, Vector
 		auto &cache = ExecuteFunctionState::GetFunctionState(state)->Cast<RegexPatternCacheState>().cache;
 		BinaryExecutor::Execute<string_t, string_t, string_t>(
 		    strings, patterns, result, [&](string_t input, string_t pattern) {
-			    auto &re = cache.Get(CreateStringPiece(pattern));
-			    if (!re.ok()) {
-				    throw InvalidInputException(re.error());
-			    }
-			    return ExtractCaptureGroup(input, re, info.group_index, info.no_match_returns_input);
+			    return ExtractCaptureGroup(input, cache.Get(CreateStringPiece(pattern)), info.group_index,
+			                               info.no_match_returns_input);
 		    });
 	}
 }
@@ -464,14 +453,10 @@ static void RegexSubstringFunction(DataChunk &args, ExpressionState &state, Vect
 		    strings, result, [&](string_t input) { return ExtractSubstring(input, lstate.constant_pattern); });
 	} else {
 		auto &cache = ExecuteFunctionState::GetFunctionState(state)->Cast<RegexPatternCacheState>().cache;
-		BinaryExecutor::Execute<string_t, string_t, string_t>(strings, patterns, result,
-		                                                      [&](string_t input, string_t pattern) {
-			                                                      auto &re = cache.Get(CreateStringPiece(pattern));
-			                                                      if (!re.ok()) {
-				                                                      throw InvalidInputException(re.error());
-			                                                      }
-			                                                      return ExtractSubstring(input, re);
-		                                                      });
+		BinaryExecutor::Execute<string_t, string_t, string_t>(
+		    strings, patterns, result, [&](string_t input, string_t pattern) {
+			    return ExtractSubstring(input, cache.Get(CreateStringPiece(pattern)));
+		    });
 	}
 }
 

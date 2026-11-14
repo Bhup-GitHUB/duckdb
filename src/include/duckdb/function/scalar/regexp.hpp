@@ -29,6 +29,7 @@ void ParseGroupNameList(const string &function_name, const Value &list_val, cons
 idx_t AdvanceOneUTF8Basic(const duckdb_re2::StringPiece &input, idx_t base);
 //! Throws if a regex result is not valid UTF-8
 void VerifyUTF8Result(const char *data, idx_t size);
+[[noreturn]] void ThrowPatternError(const duckdb_re2::RE2 &pattern);
 
 inline duckdb_re2::StringPiece CreateStringPiece(const string_t &input) {
 	return duckdb_re2::StringPiece(input.GetData(), input.GetSize());
@@ -178,7 +179,7 @@ struct RegexLocalState : public FunctionLocalState {
 	    : constant_pattern(duckdb_re2::StringPiece(info.constant_string.c_str(), info.constant_string.size()),
 	                       info.options) {
 		if (!constant_pattern.ok()) {
-			throw InvalidInputException(constant_pattern.error());
+			regexp_util::ThrowPatternError(constant_pattern);
 		}
 		if (extract_all) {
 			auto group_count_p = constant_pattern.NumberOfCapturingGroups();

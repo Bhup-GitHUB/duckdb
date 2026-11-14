@@ -128,13 +128,6 @@ void RegexpExtractAll::Execute(DataChunk &args, ExpressionState &state, Vector &
 	if (!info.constant_pattern) {
 		non_const_args = make_uniq<RegexStringPieceArgs>();
 		cache = &ExecuteFunctionState::GetFunctionState(state)->Cast<RegexPatternCacheState>().cache;
-	} else {
-		// Verify that the constant pattern is valid
-		auto &re = GetPattern(info, state, stored_re);
-		auto group_count_p = re.NumberOfCapturingGroups();
-		if (group_count_p == -1) {
-			throw InvalidInputException("Pattern failed to parse, error: '%s'", re.error());
-		}
 	}
 
 	auto list_writer = FlatVector::Writer<VectorListType<string_t>>(result, args.size());
@@ -146,11 +139,7 @@ void RegexpExtractAll::Execute(DataChunk &args, ExpressionState &state, Vector &
 				pattern_valid = false;
 			} else {
 				stored_re = &cache->Get(CreateStringPiece(pattern_entry.GetValue()));
-				auto group_count_p = stored_re->NumberOfCapturingGroups();
-				if (group_count_p == -1) {
-					throw InvalidInputException("Pattern failed to parse, error: '%s'", stored_re->error());
-				}
-				non_const_args->SetSize(UnsafeNumericCast<idx_t>(group_count_p));
+				non_const_args->SetSize(UnsafeNumericCast<idx_t>(stored_re->NumberOfCapturingGroups()));
 			}
 		}
 		auto string_entry = strings_entries[row];

@@ -1,0 +1,86 @@
+# name: test/sql/function/string/regex_invalid_pattern.test
+# description: A pattern that fails to compile raises invalid regular expression, constant or per row
+# group: [string]
+
+statement ok
+CREATE TABLE patterns AS SELECT 'abc' AS s, '(' AS p;
+
+statement error
+SELECT regexp_matches('abc', '(')
+----
+Invalid Input Error: invalid regular expression: missing ): (
+
+statement error
+SELECT regexp_matches(s, p) FROM patterns
+----
+Invalid Input Error: invalid regular expression: missing ): (
+
+statement error
+SELECT regexp_full_match('abc', '(')
+----
+Invalid Input Error: invalid regular expression: missing ): (
+
+statement error
+SELECT regexp_full_match(s, p) FROM patterns
+----
+Invalid Input Error: invalid regular expression: missing ): (
+
+statement error
+SELECT regexp_replace('abc', '(', 'x')
+----
+Invalid Input Error: invalid regular expression: missing ): (
+
+statement error
+SELECT regexp_replace(s, p, 'x') FROM patterns
+----
+Invalid Input Error: invalid regular expression: missing ): (
+
+statement error
+SELECT regexp_extract('abc', '(')
+----
+Invalid Input Error: invalid regular expression: missing ): (
+
+statement error
+SELECT regexp_extract(s, p) FROM patterns
+----
+Invalid Input Error: invalid regular expression: missing ): (
+
+statement error
+SELECT regexp_extract('abc', '(', ['g1'])
+----
+Invalid Input Error: invalid regular expression: missing ): (
+
+statement error
+SELECT regexp_extract_all('abc', '(')
+----
+Invalid Input Error: invalid regular expression: missing ): (
+
+statement error
+SELECT regexp_extract_all(s, p) FROM patterns
+----
+Invalid Input Error: invalid regular expression: missing ): (
+
+statement error
+SELECT string_split_regex('abc', '(')
+----
+Invalid Input Error: invalid regular expression: missing ): (
+
+statement error
+SELECT string_split_regex(s, p) FROM patterns
+----
+Invalid Input Error: invalid regular expression: missing ): (
+
+statement error
+SELECT substring('abc', '(')
+----
+Invalid Input Error: invalid regular expression: missing ): (
+
+statement error
+SELECT substring(s, p) FROM patterns
+----
+Invalid Input Error: invalid regular expression: missing ): (
+
+statement error
+SELECT COLUMNS('(') FROM patterns
+----
+Invalid Input Error: invalid regular expression: missing ): (

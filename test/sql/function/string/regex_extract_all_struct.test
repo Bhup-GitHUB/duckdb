@@ -347,7 +347,7 @@ Duplicate group name 'dup' in regexp_extract_all
 statement error
 SELECT regexp_extract_all('abc', '(', ['g1']);
 ----
-Pattern failed to parse
+Invalid Input Error: invalid regular expression: missing )
 
 statement error
 SELECT regexp_extract_all('abc', '(a)', ['g1','g2']);

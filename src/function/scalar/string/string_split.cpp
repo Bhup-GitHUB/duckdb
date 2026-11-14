@@ -245,11 +245,7 @@ void StringSplitRegexFunction(DataChunk &args, ExpressionState &state, Vector &r
 	} else {
 		auto &cache = ExecuteFunctionState::GetFunctionState(state)->Cast<RegexPatternCacheState>().cache;
 		StringSplitExecutor<RegexpStringSplit>(args, state, result, [&](const string_t &delim) -> void * {
-			auto &regex = cache.Get(regexp_util::CreateStringPiece(delim));
-			if (!regex.ok()) {
-				throw InvalidInputException(regex.error());
-			}
-			return &regex;
+			return &cache.Get(regexp_util::CreateStringPiece(delim));
 		});
 	}
 }

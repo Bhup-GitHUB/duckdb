@@ -472,9 +472,8 @@ void Binder::ExpandStarExpression(unique_ptr<ParsedExpression> expr,
 			}
 			auto &regex_str = StringValue::Get(val);
 			regex = make_uniq<duckdb_re2::RE2>(regex_str);
-			if (!regex->error().empty()) {
-				auto err = StringUtil::Format("Failed to compile regex \"%s\": %s", regex_str, regex->error());
-				throw BinderException(*star, err);
+			if (!regex->ok()) {
+				regexp_util::ThrowPatternError(*regex);
 			}
 			vector<unique_ptr<ParsedExpression>> new_list;
 			for (auto &expanded_expr : star_list) {

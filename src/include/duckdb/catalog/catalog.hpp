@@ -116,6 +116,11 @@ enum class RemoteCapability : uint8_t {
 	CONNECT,
 };
 
+struct ConflictReplace {
+	bool in_place = false;
+	bool exact_key = false;
+};
+
 //! The Catalog object represents the catalog of the database.
 class Catalog {
 public:
@@ -475,6 +480,14 @@ public:
 	}
 	virtual bool SupportsMultipleDMLCTEs() const {
 		return false;
+	}
+	virtual bool SupportsInsertOnConflict() const {
+		return false;
+	}
+	virtual ConflictReplace GetConflictReplace(ClientContext &context, TableCatalogEntry &table,
+	                                           const unordered_set<column_t> &key,
+	                                           const vector<PhysicalIndex> &columns) {
+		return {};
 	}
 	virtual bool IsEncrypted() const {
 		return false;

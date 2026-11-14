@@ -772,6 +772,28 @@
         "id": 206,
         "name": "bound_defaults",
         "type": "vector<Expression*>"
+      },
+      {
+        "id": 207,
+        "name": "action_type",
+        "type": "OnConflictAction",
+        "default": "OnConflictAction::THROW"
+      },
+      {
+        "id": 209,
+        "name": "on_conflict_filter",
+        "type": "unordered_set<idx_t>"
+      },
+      {
+        "id": 212,
+        "name": "set_columns",
+        "type": "vector<PhysicalIndex>"
+      },
+      {
+        "id": 16603,
+        "name": "replace_in_place",
+        "type": "bool",
+        "default": "false"
       }
     ],
     "constructor": [
@@ -1020,6 +1042,12 @@
         "id": 16587,
         "name": "in_place_unchanged_rows",
         "type": "bool"
+      },
+      {
+        "id": 16588,
+        "name": "on_conflict_update",
+        "type": "bool",
+        "default": "false"
       }
     ]
   },

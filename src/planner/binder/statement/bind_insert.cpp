@@ -1,4 +1,5 @@
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/expression/conjunction_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
@@ -408,6 +409,126 @@ static identifier_set_t GetConflictColumnNames(const TableStorageInfo &storage_i
 	return conflict_column_names;
 }
 
+static vector<unordered_set<column_t>> ConflictArbiters(OnConflictInfo &on_conflict_info, TableCatalogEntry &table,
+                                                        const TableStorageInfo &storage_info) {
+	vector<unordered_set<column_t>> arbiters;
+	if (on_conflict_info.indexed_columns.empty()) {
+		for (auto &index : storage_info.index_info) {
+			if (!index.is_unique) {
+				continue;
+			}
+			if (index.check_mode == ConstraintCheckMode::DEFERRED) {
+				// Without a conflict target, every constraint is a conflict target.
+				throw BinderException("DEFERRED PRIMARY KEY or UNIQUE constraints cannot be ON CONFLICT targets, "
+				                      "specify the ON CONFLICT columns of a constraint that is not DEFERRED");
+			}
+			if (!index.column_set.empty()) {
+				arbiters.push_back(index.column_set);
+			}
+		}
+		return arbiters;
+	}
+	auto &columns = table.GetColumns();
+	identifier_map_t<idx_t> specified_columns;
+	for (idx_t i = 0; i < on_conflict_info.indexed_columns.size(); i++) {
+		specified_columns[on_conflict_info.indexed_columns[i]] = i;
+		auto column_index = table.GetColumnIndex(on_conflict_info.indexed_columns[i]);
+		if (column_index.index == COLUMN_IDENTIFIER_ROW_ID) {
+			throw BinderException("Cannot specify ROWID as ON CONFLICT target");
+		}
+		auto &col = columns.GetColumn(column_index);
+		if (col.Generated()) {
+			throw BinderException("Cannot specify a generated column as ON CONFLICT target");
+		}
+	}
+	unordered_set<column_t> on_conflict_filter;
+	for (auto &col : columns.Physical()) {
+		auto entry = specified_columns.find(col.Name());
+		if (entry != specified_columns.end()) {
+			on_conflict_filter.insert(col.Physical().index);
+		}
+	}
+	bool deferred_index_matches = false;
+	for (auto &index : storage_info.index_info) {
+		if (!index.is_unique || on_conflict_filter != index.column_set) {
+			continue;
+		}
+		if (index.check_mode == ConstraintCheckMode::DEFERRED) {
+			deferred_index_matches = true;
+			continue;
+		}
+		if (on_conflict_info.condition) {
+			throw BinderException("ON CONFLICT WHERE clause is only supported in DO UPDATE SET ... WHERE ...\nThe "
+			                      "WHERE clause after the conflict columns is used for partial indexes which are not "
+			                      "supported.");
+		}
+		arbiters.push_back(std::move(on_conflict_filter));
+		return arbiters;
+	}
+	if (deferred_index_matches) {
+		throw BinderException("DEFERRED PRIMARY KEY or UNIQUE constraints cannot be ON CONFLICT targets");
+	}
+	throw BinderException("The specified columns as conflict target are not referenced by a UNIQUE/PRIMARY KEY "
+	                      "CONSTRAINT or INDEX");
+}
+
+struct ReplacedColumns {
+	vector<PhysicalIndex> columns;
+	bool whole_row = true;
+	bool generated = false;
+};
+
+static ReplacedColumns GetReplacedColumns(TableCatalogEntry &table, const vector<Identifier> &listed,
+                                          const unordered_set<column_t> &key) {
+	unordered_set<column_t> named;
+	for (auto &name : listed) {
+		if (!table.ColumnExists(name)) {
+			continue;
+		}
+		auto &column = table.GetColumn(name);
+		if (!column.Generated()) {
+			named.insert(column.Physical().index);
+		}
+	}
+	ReplacedColumns result;
+	for (auto &column : table.GetColumns().Physical()) {
+		const auto index = column.Physical().index;
+		if (key.count(index)) {
+			continue;
+		}
+		result.generated = result.generated || column.Generated();
+		if (listed.empty() || column.Generated() || named.count(index)) {
+			result.columns.push_back(column.Physical());
+		} else {
+			result.whole_row = false;
+		}
+	}
+	return result;
+}
+
+static bool ReadsOnly(const ParsedExpression &expr, TableCatalogEntry &table, const unordered_set<column_t> &columns) {
+	const auto everything = columns.size() == table.GetColumns().PhysicalColumnCount();
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::STAR:
+	case ExpressionClass::SUBQUERY:
+		return everything;
+	case ExpressionClass::COLUMN_REF: {
+		auto &name = expr.Cast<ColumnRefExpression>().GetColumnName();
+		if (!table.ColumnExists(name)) {
+			return false;
+		}
+		auto &column = table.GetColumn(name);
+		return column.Generated() ? everything : columns.count(column.Physical().index) != 0;
+	}
+	default:
+		break;
+	}
+	bool only = true;
+	ParsedExpressionIterator::EnumerateChildren(
+	    expr, [&](const ParsedExpression &child) { only = only && ReadsOnly(child, table, columns); });
+	return only;
+}
+
 unique_ptr<MergeIntoStatement> Binder::GenerateMergeInto(InsertQueryNode &node, TableCatalogEntry &table) {
 	D_ASSERT(node.on_conflict_info);
 
@@ -420,27 +541,25 @@ unique_ptr<MergeIntoStatement> Binder::GenerateMergeInto(InsertQueryNode &node, 
 
 	auto storage_info = table.GetStorageInfo(context);
 	auto &columns = table.GetColumns();
+	auto arbiters = ConflictArbiters(on_conflict_info, table, storage_info);
+	const auto per_row = table.catalog.SupportsInsertOnConflict();
 	// set up the columns on which to join
 	vector<vector<Identifier>> all_distinct_on_columns;
 	if (on_conflict_info.indexed_columns.empty()) {
+		if (arbiters.empty()) {
+			throw BinderException("There are no UNIQUE/PRIMARY KEY constraints that refer to this table, specify ON "
+			                      "CONFLICT columns manually");
+		}
+		if (arbiters.size() != 1 && on_conflict_info.action_type != OnConflictAction::NOTHING) {
+			// When no conflict target is provided, and the action type is UPDATE,
+			// we only allow the operation when only a single Index exists
+			throw BinderException("Conflict target has to be provided for a DO UPDATE operation when the table has "
+			                      "multiple UNIQUE/PRIMARY KEY constraints");
+		}
 		// When omitting the conflict target, we derive the join columns from the primary key/unique constraints
-		// traverse the primary key/unique constraints
-
 		vector<unique_ptr<ParsedExpression>> join_conditions;
-		// We check if there are any constraints on the table, if there aren't we throw an error.
-		idx_t found_matching_indexes = 0;
-		for (auto &index : storage_info.index_info) {
-			if (!index.is_unique) {
-				continue;
-			}
-			if (index.check_mode == ConstraintCheckMode::DEFERRED) {
-				// Without a conflict target, every constraint is a conflict target.
-				throw BinderException("DEFERRED PRIMARY KEY or UNIQUE constraints cannot be ON CONFLICT targets, "
-				                      "specify the ON CONFLICT columns of a constraint that is not DEFERRED");
-			}
-
+		for (auto &indexed_columns : arbiters) {
 			vector<unique_ptr<ParsedExpression>> and_children;
-			auto &indexed_columns = index.column_set;
 			vector<Identifier> distinct_on_columns;
 			for (auto &column : columns.Physical()) {
 				if (!indexed_columns.count(column.Physical().index)) {
@@ -453,9 +572,8 @@ unique_ptr<MergeIntoStatement> Binder::GenerateMergeInto(InsertQueryNode &node, 
 				and_children.push_back(std::move(new_condition));
 				distinct_on_columns.emplace_back(column.Name());
 			}
-			all_distinct_on_columns.push_back(std::move(distinct_on_columns));
-			if (and_children.empty()) {
-				continue;
+			if (!per_row) {
+				all_distinct_on_columns.push_back(std::move(distinct_on_columns));
 			}
 			unique_ptr<ParsedExpression> condition;
 			if (and_children.size() == 1) {
@@ -465,7 +583,6 @@ unique_ptr<MergeIntoStatement> Binder::GenerateMergeInto(InsertQueryNode &node, 
 				condition = make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(and_children));
 			}
 			join_conditions.push_back(std::move(condition));
-			found_matching_indexes++;
 		}
 		unique_ptr<ParsedExpression> join_condition;
 		if (join_conditions.size() == 1) {
@@ -476,64 +593,10 @@ unique_ptr<MergeIntoStatement> Binder::GenerateMergeInto(InsertQueryNode &node, 
 			    make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_OR, std::move(join_conditions));
 		}
 		merge_into->node->join_condition = std::move(join_condition);
-
-		if (!found_matching_indexes) {
-			throw BinderException("There are no UNIQUE/PRIMARY KEY constraints that refer to this table, specify ON "
-			                      "CONFLICT columns manually");
-		} else if (found_matching_indexes != 1) {
-			if (on_conflict_info.action_type != OnConflictAction::NOTHING) {
-				// When no conflict target is provided, and the action type is UPDATE,
-				// we only allow the operation when only a single Index exists
-				throw BinderException("Conflict target has to be provided for a DO UPDATE operation when the table has "
-				                      "multiple UNIQUE/PRIMARY KEY constraints");
-			}
-		}
 	} else {
-		// when on conflict columns are explicitly provided - use them directly
-		// first figure out if there is an index on the columns or not
-		identifier_map_t<idx_t> specified_columns;
-		for (idx_t i = 0; i < on_conflict_info.indexed_columns.size(); i++) {
-			specified_columns[on_conflict_info.indexed_columns[i]] = i;
-			auto column_index = table.GetColumnIndex(on_conflict_info.indexed_columns[i]);
-			if (column_index.index == COLUMN_IDENTIFIER_ROW_ID) {
-				throw BinderException("Cannot specify ROWID as ON CONFLICT target");
-			}
-			auto &col = columns.GetColumn(column_index);
-			if (col.Generated()) {
-				throw BinderException("Cannot specify a generated column as ON CONFLICT target");
-			}
+		if (!per_row) {
+			all_distinct_on_columns.emplace_back(on_conflict_info.indexed_columns);
 		}
-		unordered_set<column_t> on_conflict_filter;
-		for (auto &col : columns.Physical()) {
-			auto entry = specified_columns.find(col.Name());
-			if (entry != specified_columns.end()) {
-				// column was specified, set to the index
-				on_conflict_filter.insert(col.Physical().index);
-			}
-		}
-		bool index_references_columns = false;
-		bool deferred_index_matches = false;
-		for (auto &index : storage_info.index_info) {
-			if (!index.is_unique || on_conflict_filter != index.column_set) {
-				continue;
-			}
-			if (index.check_mode == ConstraintCheckMode::DEFERRED) {
-				deferred_index_matches = true;
-				continue;
-			}
-			index_references_columns = true;
-			break;
-		}
-		if (!index_references_columns) {
-			if (deferred_index_matches) {
-				throw BinderException("DEFERRED PRIMARY KEY or UNIQUE constraints cannot be ON CONFLICT targets");
-			}
-			// Same as before, this is essentially a no-op, turning this into a DO THROW instead
-			// But since this makes no logical sense, it's probably better to throw an error
-			throw BinderException("The specified columns as conflict target are not referenced by a UNIQUE/PRIMARY KEY "
-			                      "CONSTRAINT or INDEX");
-		}
-		all_distinct_on_columns.emplace_back(on_conflict_info.indexed_columns);
 		merge_into->node->using_columns = on_conflict_info.indexed_columns;
 	}
 
@@ -632,19 +695,17 @@ unique_ptr<MergeIntoStatement> Binder::GenerateMergeInto(InsertQueryNode &node, 
 	auto insert_action = make_uniq<MergeIntoAction>();
 	insert_action->action_type = MergeActionType::MERGE_INSERT;
 	insert_action->column_order = node.column_order;
+	insert_action->on_conflict_update = per_row;
 
 	merge_into->node->actions[MergeActionCondition::WHEN_NOT_MATCHED_BY_TARGET].push_back(std::move(insert_action));
 
-	if (on_conflict_info.condition) {
-		throw BinderException("ON CONFLICT WHERE clause is only supported in DO UPDATE SET ... WHERE ...\nThe WHERE "
-		                      "clause after the conflict columns is used for partial indexes which are not supported.");
-	}
 	if (on_conflict_info.action_type == OnConflictAction::UPDATE) {
 		// when doing UPDATE set up the when matched action
 		auto update_action = make_uniq<MergeIntoAction>();
 		update_action->exclude_columns = GetConflictColumnNames(storage_info, table);
 		update_action->action_type = MergeActionType::MERGE_UPDATE;
 		update_action->column_order = node.column_order;
+		update_action->on_conflict_update = per_row;
 		if (on_conflict_info.set_info) {
 			for (auto &col : on_conflict_info.set_info->expressions) {
 				vector<identifier_set_t> lambda_params;
@@ -697,24 +758,13 @@ BoundStatement Binder::BindNode(InsertQueryNode &node) {
 		return std::move(*expanded);
 	}
 
-	if (node.on_conflict_info) {
-		// generate a MERGE INTO statement and bind it instead
-		auto merge_into = GenerateMergeInto(node, table);
-		return Bind(*merge_into);
-	}
-	if (!table.temporary) {
-		// inserting into a non-temporary table: alters underlying database
-		DatabaseModificationType modification_type = DatabaseModificationType::INSERT_DATA;
-		GetStatementProperties().RegisterDBModify(table.GetStorageCatalog(context), context, modification_type);
-	}
-
-	auto insert = make_uniq<LogicalInsert>(table, GenerateTableIndex());
-
 	auto values_list = node.GetValuesList();
-
-	// bind the root select node (if any)
 	BoundStatement root_select;
-	if (node.column_order == InsertColumnOrder::INSERT_BY_NAME) {
+	shared_ptr<Binder> select_by_name;
+	const auto bind_by_name = [&]() {
+		if (select_by_name || node.column_order != InsertColumnOrder::INSERT_BY_NAME) {
+			return;
+		}
 		if (values_list) {
 			throw BinderException("INSERT BY NAME can only be used when inserting from a SELECT statement");
 		}
@@ -725,11 +775,73 @@ BoundStatement Binder::BindNode(InsertQueryNode &node) {
 			throw BinderException("INSERT BY NAME cannot be combined with an explicit column list");
 		}
 		D_ASSERT(node.select_statement);
-		// INSERT BY NAME - generate the columns from the names of the SELECT statement
-		auto select_binder = Binder::CreateBinder(context, this);
-		root_select = select_binder->Bind(*node.select_statement);
-		MoveCorrelatedExpressions(*select_binder);
+		select_by_name = Binder::CreateBinder(context, this);
+		root_select = select_by_name->Bind(*node.select_statement);
+	};
 
+	auto action_type = OnConflictAction::THROW;
+	unordered_set<column_t> on_conflict_filter;
+	vector<PhysicalIndex> set_columns;
+	bool replace_in_place = false;
+	if (node.on_conflict_info) {
+		auto &on_conflict_info = *node.on_conflict_info;
+		bool merge = true;
+		if (table.catalog.SupportsInsertOnConflict() && on_conflict_info.action_type != OnConflictAction::UPDATE) {
+			auto arbiters = ConflictArbiters(on_conflict_info, table, table.GetStorageInfo(context));
+			if (on_conflict_info.action_type == OnConflictAction::NOTHING) {
+				merge = false;
+				if (!arbiters.empty()) {
+					action_type = OnConflictAction::NOTHING;
+					if (!on_conflict_info.indexed_columns.empty()) {
+						on_conflict_filter = std::move(arbiters[0]);
+					}
+				}
+			} else if (arbiters.size() == 1) {
+				bind_by_name();
+				auto &key = arbiters[0];
+				auto replaced = GetReplacedColumns(table, select_by_name ? root_select.names : node.columns, key);
+				const auto [in_place, exact_key] =
+				    table.catalog.GetConflictReplace(context, table, key, replaced.columns);
+				unordered_set<column_t> stored;
+				for (auto &column : replaced.columns) {
+					stored.insert(column.index);
+				}
+				if (exact_key) {
+					stored.insert(key.begin(), key.end());
+				}
+				if ((replaced.whole_row || !replaced.generated) && (in_place || (replaced.whole_row && exact_key)) &&
+				    absl::c_all_of(node.returning_list, [&](const unique_ptr<ParsedExpression> &expr) {
+					    return ReadsOnly(*expr, table, stored);
+				    })) {
+					merge = false;
+					action_type = OnConflictAction::REPLACE;
+					on_conflict_filter = std::move(key);
+					set_columns = std::move(replaced.columns);
+					replace_in_place = in_place;
+				}
+			}
+		}
+		if (merge) {
+			// generate a MERGE INTO statement and bind it instead
+			auto merge_into = GenerateMergeInto(node, table);
+			return Bind(*merge_into);
+		}
+	}
+	if (!table.temporary) {
+		// inserting into a non-temporary table: alters underlying database
+		DatabaseModificationType modification_type = DatabaseModificationType::INSERT_DATA;
+		GetStatementProperties().RegisterDBModify(table.GetStorageCatalog(context), context, modification_type);
+	}
+
+	auto insert = make_uniq<LogicalInsert>(table, GenerateTableIndex());
+	insert->action_type = action_type;
+	insert->on_conflict_filter = std::move(on_conflict_filter);
+	insert->set_columns = std::move(set_columns);
+	insert->replace_in_place = replace_in_place;
+
+	bind_by_name();
+	if (select_by_name) {
+		MoveCorrelatedExpressions(*select_by_name);
 		node.columns = root_select.names;
 	}
 

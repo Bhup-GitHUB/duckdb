@@ -6,6 +6,7 @@
 #include "duckdb/function/scalar/regexp.hpp"
 #include "duckdb/function/scalar/regexp_replace_constant.hpp"
 
+#include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/vector_operations/binary_executor.hpp"
 #include "duckdb/common/vector_operations/ternary_executor.hpp"
@@ -161,27 +162,61 @@ static void RegexpMatchesFunction(DataChunk &args, ExpressionState &state, Vecto
 //===--------------------------------------------------------------------===//
 // Regexp Replace
 //===--------------------------------------------------------------------===//
-RegexpReplaceBindData::RegexpReplaceBindData() : global_replace(false) {
+RegexpReplaceBindData::RegexpReplaceBindData() : global_replace(false), postgres_replacement(false) {
 }
 
 RegexpReplaceBindData::RegexpReplaceBindData(duckdb_re2::RE2::Options options, string constant_string_p,
-                                             bool constant_pattern, bool global_replace)
-    : RegexpBaseBindData(options, std::move(constant_string_p), constant_pattern), global_replace(global_replace) {
+                                             bool constant_pattern, bool global_replace, bool postgres_replacement)
+    : RegexpBaseBindData(options, std::move(constant_string_p), constant_pattern), global_replace(global_replace),
+      postgres_replacement(postgres_replacement) {
 }
 
 unique_ptr<FunctionData> RegexpReplaceBindData::Copy() const {
-	auto copy = make_uniq<RegexpReplaceBindData>(options, constant_string, constant_pattern, global_replace);
+	auto copy = make_uniq<RegexpReplaceBindData>(options, constant_string, constant_pattern, global_replace,
+	                                             postgres_replacement);
 	return std::move(copy);
 }
 
 bool RegexpReplaceBindData::Equals(const FunctionData &other_p) const {
 	auto &other = other_p.Cast<RegexpReplaceBindData>();
-	return RegexpBaseBindData::Equals(other) && global_replace == other.global_replace;
+	return RegexpBaseBindData::Equals(other) && global_replace == other.global_replace &&
+	       postgres_replacement == other.postgres_replacement;
+}
+
+static void PostgresReplacementToRewrite(string_t replace, int groups, std::string &rewrite) {
+	rewrite.clear();
+	const auto data = replace.GetData();
+	const auto size = replace.GetSize();
+	for (idx_t i = 0; i < size; i++) {
+		if (data[i] != '\\') {
+			rewrite += data[i];
+			continue;
+		}
+		if (i + 1 == size) {
+			rewrite += "\\\\";
+			break;
+		}
+		const auto next = data[++i];
+		if (next >= '1' && next <= '9') {
+			if (next - '0' <= groups) {
+				rewrite += '\\';
+				rewrite += next;
+			}
+		} else if (next == '&') {
+			rewrite += "\\0";
+		} else if (next == '\\') {
+			rewrite += "\\\\";
+		} else {
+			rewrite += "\\\\";
+			rewrite += next;
+		}
+	}
 }
 
 static unique_ptr<FunctionData> RegexReplaceBind(BindScalarFunctionInput &input) {
 	auto &arguments = input.GetArguments();
 	auto data = make_uniq<RegexpReplaceBindData>();
+	data->postgres_replacement = Catalog::DefaultCompatibility(input.GetClientContext()) == SqlCompatibility::POSTGRES;
 
 	data->constant_pattern = TryParseConstantPattern(input.TryGetConstant(1), data->constant_string);
 	if (arguments.size() == 4) {
@@ -286,24 +321,41 @@ static void RegexReplaceFunction(DataChunk &args, ExpressionState &state, Vector
 	const auto &patterns = args.data[1];
 	const auto &replaces = args.data[2];
 
+	auto &local = *ExecuteFunctionState::GetFunctionState(state);
+	auto &postgres_rewrite =
+	    info.constant_pattern ? local.Cast<RegexLocalState>().rewrite : local.Cast<RegexPatternCacheState>().rewrite;
+	auto &out =
+	    info.constant_pattern ? local.Cast<RegexLocalState>().replaced : local.Cast<RegexPatternCacheState>().replaced;
+	auto rewrite_of = [&](const RE2 &re, const string_t &replace) {
+		if (!info.postgres_replacement) {
+			return CreateStringPiece(replace);
+		}
+		PostgresReplacementToRewrite(replace, re.NumberOfCapturingGroups(), postgres_rewrite);
+		return duckdb_re2::StringPiece(postgres_rewrite);
+	};
 	if (info.constant_pattern && !info.global_replace && replaces.GetVectorType() == VectorType::CONSTANT_VECTOR &&
 	    !ConstantVector::IsNull(replaces)) {
 		auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<RegexLocalState>();
-		RegexpReplaceConstant::Execute(strings, ConstantVector::GetData<string_t>(replaces)[0], lstate, result);
+		const auto rewrite = rewrite_of(lstate.constant_pattern, ConstantVector::GetData<string_t>(replaces)[0]);
+		RegexpReplaceConstant::Execute(strings, string_t(rewrite.data(), UnsafeNumericCast<uint32_t>(rewrite.size())),
+		                               lstate, result);
 		return;
 	}
 	auto &heap = StringVector::GetStringHeap(result);
-	std::string out;
 	const bool constant_rewrite = info.constant_pattern && replaces.GetVectorType() == VectorType::CONSTANT_VECTOR;
+	const string_t *constant_replace = constant_rewrite ? ConstantVector::GetData<string_t>(replaces) : nullptr;
 	bool rewrite_checked = false;
+	duckdb_re2::StringPiece checked_piece;
 	auto replace_row = [&](string_t input, const RE2 &re, string_t replace) {
-		auto replace_piece = CreateStringPiece(replace);
+		auto replace_piece =
+		    rewrite_checked ? checked_piece : rewrite_of(re, constant_replace ? *constant_replace : replace);
 		if (!rewrite_checked) {
 			std::string rewrite_error;
 			if (!re.CheckRewriteString(replace_piece, &rewrite_error)) {
 				throw InvalidInputException("Invalid replacement string for regexp_replace: %s", rewrite_error);
 			}
 			rewrite_checked = constant_rewrite;
+			checked_piece = replace_piece;
 		}
 		auto input_piece = CreateStringPiece(input);
 		const bool replaced = info.global_replace ? RegexpGlobalReplace(state, input_piece, re, replace_piece, out)

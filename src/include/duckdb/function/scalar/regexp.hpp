@@ -100,9 +100,10 @@ struct RegexpMatchesBindData : public RegexpBaseBindData {
 struct RegexpReplaceBindData : public RegexpBaseBindData {
 	RegexpReplaceBindData();
 	RegexpReplaceBindData(duckdb_re2::RE2::Options options, string constant_string, bool constant_pattern,
-	                      bool global_replace);
+	                      bool global_replace, bool postgres_replacement = false);
 
 	bool global_replace;
+	bool postgres_replacement;
 
 	unique_ptr<FunctionData> Copy() const override;
 	bool Equals(const FunctionData &other_p) const override;
@@ -191,6 +192,8 @@ struct RegexLocalState : public FunctionLocalState {
 	RE2 constant_pattern;
 	//! Used by regexp_extract_all to pre-allocate the args
 	RegexStringPieceArgs group_buffer;
+	std::string rewrite;
+	std::string replaced;
 };
 
 class RegexPatternCache {
@@ -214,6 +217,8 @@ struct RegexPatternCacheState : public FunctionLocalState {
 	}
 
 	RegexPatternCache cache;
+	std::string rewrite;
+	std::string replaced;
 };
 
 unique_ptr<FunctionLocalState> RegexInitLocalState(ExpressionState &state, const BoundFunctionExpression &expr,

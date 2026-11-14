@@ -1,0 +1,31 @@
+# name: test/sql/types/timestamp/timestamptz_precision.test
+# description: A time-zoned timestamp with a precision keeps its time zone
+# group: [timestamp]
+
+require icu
+
+statement ok
+SET TimeZone = 'UTC';
+
+query II
+SELECT typeof('2026-01-01 00:00:00+05'::TIMESTAMP(3) WITH TIME ZONE), typeof('2026-01-01 00:00:00+05'::TIMESTAMPTZ(0))
+----
+TIMESTAMP WITH TIME ZONE	TIMESTAMP WITH TIME ZONE
+
+query II
+SELECT '2026-01-01 00:00:00+05'::TIMESTAMP(3) WITH TIME ZONE, '2026-01-01 00:00:00+05'::TIMESTAMPTZ(6)
+----
+2025-12-31 19:00:00+00	2025-12-31 19:00:00+00
+
+statement ok
+CREATE TABLE tzp (a TIMESTAMP(3) WITH TIME ZONE, b TIMESTAMP(3) WITHOUT TIME ZONE)
+
+query II
+SELECT typeof(a), typeof(b) FROM (SELECT * FROM tzp UNION ALL SELECT NULL, NULL)
+----
+TIMESTAMP WITH TIME ZONE	TIMESTAMP_MS
+
+statement error
+SELECT '2026-01-01'::TIMESTAMPTZ(10)
+----
+nano-second precision

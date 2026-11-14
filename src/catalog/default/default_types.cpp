@@ -108,6 +108,25 @@ void RegisterTimestampConstructors(TypeConstructorSet &set) {
 	set.AddFunction(TypeConstructor(std::move(signature), BindTimestampType));
 }
 
+LogicalType BindDefaultTimestampTzType(BindLogicalTypeInput &input) {
+	return LogicalType::TIMESTAMP_TZ;
+}
+
+LogicalType BindTimestampTzType(BindLogicalTypeInput &input) {
+	if (input.modifiers[0].GetValue().GetValue<uint8_t>() > 9) {
+		throw BinderException(input.GetLocation(0), "TIMESTAMP only supports until nano-second precision (9)");
+	}
+	return LogicalType::TIMESTAMP_TZ;
+}
+
+void RegisterTimestampTzConstructors(TypeConstructorSet &set) {
+	set.AddFunction(TypeConstructor(TypeConstructor::Signature(), BindDefaultTimestampTzType));
+
+	auto signature = TypeConstructor::Signature();
+	signature.AddParameter("precision", LogicalType::UTINYINT);
+	set.AddFunction(TypeConstructor(std::move(signature), BindTimestampTzType));
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // VARCHAR Type
 //----------------------------------------------------------------------------------------------------------------------
@@ -413,8 +432,8 @@ static const builtin_type_array &GetBuiltinTypes() {
 	     {"timestamp_ms", LogicalTypeId::TIMESTAMP_MS, nullptr},
 	     {"timestamp_ns", LogicalTypeId::TIMESTAMP_NS, nullptr},
 	     {"timestamp_s", LogicalTypeId::TIMESTAMP_SEC, nullptr},
-	     {"timestamptz", LogicalTypeId::TIMESTAMP_TZ, nullptr},
-	     {"timestamp with time zone", LogicalTypeId::TIMESTAMP_TZ, nullptr},
+	     {"timestamptz", LogicalTypeId::TIMESTAMP_TZ, RegisterTimestampTzConstructors},
+	     {"timestamp with time zone", LogicalTypeId::TIMESTAMP_TZ, RegisterTimestampTzConstructors},
 	     {"timestamptz_ns", LogicalTypeId::TIMESTAMP_TZ_NS, nullptr},
 	     {"timetz", LogicalTypeId::TIME_TZ, nullptr},
 	     {"time with time zone", LogicalTypeId::TIME_TZ, nullptr},

@@ -157,6 +157,10 @@ PEGTransformerFactory::TransformTimeType(PEGTransformer &transformer, const Logi
 		if (timestamp_precision < 0) {
 			throw ParserException("TIMESTAMP precision should be between 0 and 10 (inclusive)");
 		}
+		if (with_timezone) {
+			return make_uniq<TypeExpression>(Identifier(EnumUtil::ToString(LogicalType::TIMESTAMP_TZ)),
+			                                 vector<unique_ptr<ParsedExpression>> {});
+		}
 		if (timestamp_precision == 0) {
 			return make_uniq<TypeExpression>(Identifier(EnumUtil::ToString(LogicalType::TIMESTAMP_S)),
 			                                 vector<unique_ptr<ParsedExpression>> {});

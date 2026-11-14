@@ -126,6 +126,7 @@ public:
 
 	void Copy(const BaseStatistics &other);
 	void ResetAdditiveStatistics();
+	void SubtractAdditiveStatistics(const BaseStatistics &part);
 
 	unique_ptr<BaseStatistics> PushdownExtract(const StorageIndex &index) const;
 	BaseStatistics Copy() const;

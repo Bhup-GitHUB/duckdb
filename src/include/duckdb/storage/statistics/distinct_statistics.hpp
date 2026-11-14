@@ -30,6 +30,7 @@ public:
 
 public:
 	void Merge(const DistinctStatistics &other);
+	void SubtractCounts(const DistinctStatistics &part);
 
 	unique_ptr<DistinctStatistics> Copy() const;
 

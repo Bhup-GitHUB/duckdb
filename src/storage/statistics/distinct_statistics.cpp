@@ -22,6 +22,12 @@ void DistinctStatistics::Merge(const DistinctStatistics &other) {
 	total_count += other.total_count;
 }
 
+void DistinctStatistics::SubtractCounts(const DistinctStatistics &part) {
+	D_ASSERT(part.sample_count <= sample_count && part.total_count <= total_count);
+	sample_count -= part.sample_count;
+	total_count -= part.total_count;
+}
+
 void DistinctStatistics::UpdateSample(const Vector &new_data, idx_t count, Vector &hashes) {
 	total_count += count;
 	const auto original_count = count;

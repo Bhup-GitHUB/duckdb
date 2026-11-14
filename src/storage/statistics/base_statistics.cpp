@@ -216,6 +216,40 @@ void BaseStatistics::ResetAdditiveStatistics() {
 	}
 }
 
+void BaseStatistics::SubtractAdditiveStatistics(const BaseStatistics &part) {
+	switch (GetStatsType()) {
+	case StatisticsType::STRING_STATS: {
+		auto &data = stats_union.string_data;
+		const auto &removed = part.stats_union.string_data;
+		if (data.has_total_string_length) {
+			D_ASSERT(removed.has_total_string_length && removed.total_string_length <= data.total_string_length);
+			data.total_string_length -= removed.total_string_length;
+		}
+		break;
+	}
+	case StatisticsType::LIST_STATS:
+	case StatisticsType::ARRAY_STATS:
+		child_stats[0].SubtractAdditiveStatistics(part.child_stats[0]);
+		break;
+	case StatisticsType::STRUCT_STATS:
+		for (idx_t child_idx = 0; child_idx < StructType::GetChildCount(type); child_idx++) {
+			child_stats[child_idx].SubtractAdditiveStatistics(part.child_stats[child_idx]);
+		}
+		break;
+	case StatisticsType::VARIANT_STATS:
+		if (part.GetType().id() == LogicalTypeId::VALIDITY) {
+			break;
+		}
+		child_stats[0].SubtractAdditiveStatistics(part.child_stats[0]);
+		if (child_stats[1].GetType().id() != LogicalTypeId::INVALID) {
+			child_stats[1].ResetAdditiveStatistics();
+		}
+		break;
+	default:
+		break;
+	}
+}
+
 idx_t BaseStatistics::GetDistinctCount() {
 	return distinct_count;
 }

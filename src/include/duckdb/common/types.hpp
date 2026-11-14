@@ -561,6 +561,7 @@ public:
 	// explicitly allowing these functions to be capitalized to be in-line with the remaining functions
 	DUCKDB_API static LogicalType DECIMAL(uint8_t width, uint8_t scale);      // NOLINT
 	DUCKDB_API static LogicalType VARCHAR_COLLATION(string collation);        // NOLINT
+	DUCKDB_API static LogicalType VARCHAR_COLLATION(const LogicalType &base, std::string_view collation); // NOLINT
 	DUCKDB_API static LogicalType LIST(const LogicalType &child);             // NOLINT
 	DUCKDB_API static LogicalType STRUCT(child_list_t<LogicalType> children); // NOLINT
 	//! Unnamed struct - shares the physical representation of STRUCT but is a distinct logical type

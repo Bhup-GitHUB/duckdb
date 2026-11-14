@@ -317,7 +317,7 @@ static unique_ptr<Expression> FinalizeBindOrderExpression(unique_ptr<Expression>
 			if (sql_types[index].id() != LogicalTypeId::VARCHAR) {
 				throw BinderException(*result, "COLLATE can only be applied to varchar columns");
 			}
-			result->SetReturnType(LogicalType::VARCHAR_COLLATION(std::move(collation)));
+			result->SetReturnType(LogicalType::VARCHAR_COLLATION(sql_types[index], collation));
 		}
 		return result;
 	}

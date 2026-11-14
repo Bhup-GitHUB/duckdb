@@ -1577,6 +1577,12 @@ LogicalType LogicalType::VARCHAR_COLLATION(string collation) { // NOLINT
 	return LogicalType(LogicalTypeId::VARCHAR, std::move(string_info));
 }
 
+LogicalType LogicalType::VARCHAR_COLLATION(const LogicalType &base, std::string_view collation) { // NOLINT
+	D_ASSERT(base.id() == LogicalTypeId::VARCHAR);
+	auto result = collation.empty() ? LogicalType::VARCHAR : VARCHAR_COLLATION(string(collation));
+	return base.HasAlias() ? result.WithAlias(base.GetAlias()) : result;
+}
+
 //===--------------------------------------------------------------------===//
 // List Type
 //===--------------------------------------------------------------------===//

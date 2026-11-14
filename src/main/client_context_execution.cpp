@@ -81,6 +81,18 @@ ErrorData ClientContext::EndQueryInternal(ClientContextLock &lock, bool success,
 	if (active_query->executor) {
 		active_query->executor->CancelTasks();
 	}
+	ErrorData error;
+	if (success && transaction.HasActiveTransaction()) {
+		try {
+			OnStatementEnd();
+		} catch (std::exception &ex) {
+			error = ErrorData(ex);
+			ProcessError(error, active_query->query);
+			success = false;
+			invalidate_transaction = ErrorInvalidatesTransaction(error.Type());
+			previous_error = &error;
+		}
+	}
 	active_query->progress_bar.reset();
 	D_ASSERT(active_query.get());
 	active_query.reset();
@@ -89,7 +101,6 @@ ErrorData ClientContext::EndQueryInternal(ClientContextLock &lock, bool success,
 		lock_guard<mutex> guard(query_progress_lock);
 		query_progress.Initialize();
 	}
-	ErrorData error;
 	try {
 		if (transaction.HasActiveTransaction()) {
 			transaction.ResetActiveQuery();

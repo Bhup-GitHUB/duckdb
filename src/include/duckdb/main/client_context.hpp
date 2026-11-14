@@ -144,6 +144,8 @@ public:
 	}
 	virtual void OnBoundPlan(Binder &binder, LogicalOperator &plan) {
 	}
+	virtual void OnStatementEnd() {
+	}
 	virtual idx_t ActingRole() const {
 		return 0;
 	}

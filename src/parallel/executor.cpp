@@ -22,6 +22,7 @@
 #include "duckdb/parallel/progress_verifier.hpp"
 #include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/parallel/thread_context.hpp"
+#include "duckdb/transaction/meta_transaction.hpp"
 
 #include <algorithm>
 #include <chrono>

@@ -281,6 +281,29 @@ void StatementPreprocessor::ExpandCopyDatabase(vector<unique_ptr<SQLStatement>> 
 		auto &target = Catalog::GetCatalog(context, copy.to_database).GetName();
 		auto transaction = source.GetCatalogTransaction(context);
 		for (auto &entry : PhysicalExport::GetNaiveExportOrder(context, source)) {
+			if (entry.get().type == CatalogType::SEQUENCE_ENTRY) {
+				auto owner = source.OwnerOf(transaction, entry);
+				if (!owner || owner->type != CatalogType::TABLE_ENTRY) {
+					continue;
+				}
+				auto &table = owner->Cast<TableCatalogEntry>();
+				auto column = PhysicalExport::OwningColumn(transaction, table, entry);
+				if (!column) {
+					continue;
+				}
+				auto ownership = make_uniq<ChangeOwnershipInfo>(
+				    CatalogType::SEQUENCE_ENTRY,
+				    AlterEntryData(
+				        QualifiedName::FromCatalogSchema(target, entry.get().ParentSchemaPath(), entry.get().name),
+				        OnEntryNotFound::THROW_EXCEPTION),
+				    Identifier(), Identifier());
+				ownership->owner_path = {table.name, column->Name()};
+				auto alter = make_uniq<AlterStatement>();
+				alter->info = std::move(ownership);
+				alter->query = alter->ToString();
+				expanded.push_back(std::move(alter));
+				continue;
+			}
 			if (entry.get().type != CatalogType::INDEX_ENTRY) {
 				continue;
 			}

@@ -50,19 +50,18 @@ INSERT INTO t1 VALUES(0.0);
 statement ok
 COMMIT;
 
-query II
+statement error
 SELECT c0, exp(c0) IS NULL FROM t1;
 ----
-10000.0	false
-0.0	false
+Out of Range Error: value out of range: overflow
 
-query II
+statement error
 SELECT c0, exp(c0) FROM t1;
 ----
-10000.0	inf
-0.0	1
+Out of Range Error: value out of range: overflow
 
-query I
+statement error
 SELECT c0 FROM t1 WHERE exp(c0) IS NULL;
 ----
+Out of Range Error: value out of range: overflow
 

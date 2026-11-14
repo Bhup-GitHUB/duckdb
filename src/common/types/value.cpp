@@ -567,24 +567,6 @@ Value Value::UBIGINT(uint64_t value) {
 	return result;
 }
 
-bool Value::FloatIsFinite(float value) {
-	return !(std::isnan(value) || std::isinf(value));
-}
-
-bool Value::DoubleIsFinite(double value) {
-	return !(std::isnan(value) || std::isinf(value));
-}
-
-template <>
-bool Value::IsFinite(float input) {
-	return Value::FloatIsFinite(input);
-}
-
-template <>
-bool Value::IsFinite(double input) {
-	return Value::DoubleIsFinite(input);
-}
-
 template <>
 bool Value::IsFinite(date_t input) {
 	return input.IsFinite();

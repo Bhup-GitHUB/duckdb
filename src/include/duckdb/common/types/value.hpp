@@ -297,8 +297,12 @@ public:
 	DUCKDB_API bool operator<=(const int64_t &rhs) const;
 	DUCKDB_API bool operator>=(const int64_t &rhs) const;
 
-	DUCKDB_API static bool FloatIsFinite(float value);
-	DUCKDB_API static bool DoubleIsFinite(double value);
+	static bool FloatIsFinite(float value) {
+		return std::isfinite(value);
+	}
+	static bool DoubleIsFinite(double value) {
+		return std::isfinite(value);
+	}
 	template <class T>
 	static bool IsNan(T value) {
 		throw InternalException("Unimplemented template type for Value::IsNan");
@@ -693,9 +697,13 @@ inline bool Value::IsNan(double input) {
 }
 
 template <>
-DUCKDB_API bool Value::IsFinite(float input);
+inline bool Value::IsFinite(float input) {
+	return FloatIsFinite(input);
+}
 template <>
-DUCKDB_API bool Value::IsFinite(double input);
+inline bool Value::IsFinite(double input) {
+	return DoubleIsFinite(input);
+}
 template <>
 DUCKDB_API bool Value::IsFinite(date_t input);
 template <>

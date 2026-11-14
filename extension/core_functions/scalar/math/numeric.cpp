@@ -1284,6 +1284,23 @@ namespace {
 struct ExpOperator {
 	template <class TA, class TR>
 	static inline TR Operation(TA left) {
+		auto result = std::exp(left);
+		if (result != 0 && Value::IsFinite(result)) {
+			return result;
+		}
+		if (Value::IsFinite(left)) {
+			if (result == 0) {
+				throw OutOfRangeException("value out of range: underflow");
+			}
+			throw OutOfRangeException("value out of range: overflow");
+		}
+		return result;
+	}
+};
+
+struct IEEEExpOperator {
+	template <class TA, class TR>
+	static inline TR Operation(TA left) {
 		return std::exp(left);
 	}
 };
@@ -1292,8 +1309,9 @@ struct ExpOperator {
 
 ScalarFunction ExpFun::GetFunction() {
 	auto func = NameXArgument(
-	    ScalarFunction({}, LogicalType::DOUBLE, ScalarFunction::UnaryFunction<double, double, ExpOperator>),
+	    ScalarFunction({}, LogicalType::DOUBLE, nullptr, BindIEEEFloatingUnary<ExpOperator, IEEEExpOperator>),
 	    LogicalType::DOUBLE);
+	func.SetFallible();
 	func.SetUnaryArgProperties(ArgProperties().NonDecreasing());
 	return func;
 }
@@ -1309,7 +1327,20 @@ struct PowOperator {
 		if (base == 0.0 && exponent < 0.0) {
 			throw OutOfRangeException("zero raised to a negative power is undefined");
 		}
-		return std::pow(base, exponent);
+		auto result = std::pow(base, exponent);
+		if (result != 0.0 && Value::IsFinite(result)) {
+			return result;
+		}
+		if (Value::IsFinite(base) && Value::IsFinite(exponent)) {
+			if (result == 0.0) {
+				if (base != 0.0) {
+					throw OutOfRangeException("value out of range: underflow");
+				}
+			} else if (!Value::IsNan(result)) {
+				throw OutOfRangeException("value out of range: overflow");
+			}
+		}
+		return result;
 	}
 };
 

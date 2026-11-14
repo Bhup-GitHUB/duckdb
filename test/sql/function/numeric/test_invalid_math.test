@@ -40,15 +40,40 @@ SELECT SQRT(0)
 ----
 0
 
-query RRR
-SELECT POW(1e300,100), POW(-1e300,100), POW(-1.0, 0.5)
+statement error
+SELECT POW(1e300,100)
 ----
-inf	inf	nan
+value out of range: overflow
 
-query RR
-SELECT EXP(1e300), EXP(1e100)
+statement error
+SELECT POW(-1e300,100)
 ----
-inf	inf
+value out of range: overflow
+
+statement error
+SELECT POW(1e-300,100)
+----
+value out of range: underflow
+
+query R
+SELECT POW(-1.0, 0.5)
+----
+nan
+
+statement error
+SELECT EXP(1e300)
+----
+value out of range: overflow
+
+statement error
+SELECT EXP(-1e300)
+----
+value out of range: underflow
+
+query RRR
+SELECT EXP('inf'::DOUBLE), EXP('-inf'::DOUBLE), EXP(0)
+----
+inf	0.0	1.0
 
 query R
 SELECT DEGREES(1e308)

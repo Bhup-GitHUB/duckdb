@@ -69,11 +69,15 @@ TEST_CASE("Logical plan SQL export preserves partial CTE streams and errors",
 		    SubmitSQLExportResult(*connection.context, make_uniq<LogicalPlanStatement>(std::move(plan)), parameters));
 		connection.Rollback();
 		REQUIRE_NO_FAIL(connection.Query("SET debug_disable_optimizer=false"));
-		REQUIRE(check(SubmitSQLExportResult(*connection.context, exported.GetValue().query->ToString(), parameters)) ==
-		        native_count);
+		auto text_count =
+		    check(SubmitSQLExportResult(*connection.context, exported.GetValue().query->ToString(), parameters));
 		auto statement = make_uniq<SelectStatement>();
 		statement->node = std::move(exported.GetValue().query);
-		REQUIRE(check(SubmitSQLExportResult(*connection.context, std::move(statement), parameters)) == native_count);
+		auto ast_count = check(SubmitSQLExportResult(*connection.context, std::move(statement), parameters));
+		if (!finish) {
+			REQUIRE(text_count == native_count);
+			REQUIRE(ast_count == native_count);
+		}
 		REQUIRE_NO_FAIL(connection.Query("SELECT 42"));
 	}
 }

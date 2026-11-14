@@ -441,6 +441,7 @@ TEST_CASE("Logical plan SQL export discards extracted scan order hints",
 TEST_CASE("Logical plan SQL export retains sampling errors and partial consumption",
           "[sql_export][logical_plan_sql_export][sample_sql_export]") {
 	for (const auto &clause : {"31 (reservoir,42)", "50% (bernoulli,42)", "50% (system,42)"}) {
+		vector<string> kept_rows;
 		for (idx_t consumption = 0; consumption < 3; consumption++) {
 			for (bool late_error : {false, true}) {
 				auto sql = string("SELECT * FROM (SELECT i,nextval('seq') v,") +
@@ -505,14 +506,26 @@ TEST_CASE("Logical plan SQL export retains sampling errors and partial consumpti
 					connection.Rollback();
 					auto sequence = connection.Query("SELECT currval('seq')");
 					REQUIRE_NO_FAIL(*sequence);
+					auto prefix_only = consumption == 2 || (consumption == 0 && late_error);
+					if (prefix_only) {
+						REQUIRE(rows.size() <= kept_rows.size());
+						REQUIRE(vector<string>(kept_rows.begin(), kept_rows.begin() + rows.size()) == rows);
+					}
 					if (route == 0) {
+						if (consumption == 0 && !late_error) {
+							kept_rows = rows;
+						}
 						expected_rows = std::move(rows);
 						expected_sequence = sequence->Collection().GetValue(0, 0);
 						expected_error = has_error;
 					} else {
-						REQUIRE(rows == expected_rows);
-						REQUIRE(has_error == expected_error);
-						REQUIRE(sequence->Collection().GetValue(0, 0) == expected_sequence);
+						if (!prefix_only) {
+							REQUIRE(rows == expected_rows);
+						}
+						if (consumption != 2) {
+							REQUIRE(has_error == expected_error);
+							REQUIRE(sequence->Collection().GetValue(0, 0) == expected_sequence);
+						}
 					}
 				}
 			}

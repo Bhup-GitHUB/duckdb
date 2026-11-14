@@ -22,8 +22,10 @@
 namespace duckdb {
 
 DatabaseManager::DatabaseManager(DatabaseInstance &db)
-    : db(db), next_oid(FIRST_OID), next_system_oid(FIRST_SYSTEM_OID), current_query_number(1),
-      current_transaction_id(0), remote_catalog_count(0) {
+    : db(db), case_sensitive_names(DBConfig::GetConfig(db).options.case_sensitive_database_names),
+      databases(0, IdentifierHashFunction(case_sensitive_names), IdentifierEquality(case_sensitive_names)),
+      next_oid(FIRST_OID), next_system_oid(FIRST_SYSTEM_OID), current_query_number(1), current_transaction_id(0),
+      remote_catalog_count(0) {
 	system = make_shared_ptr<AttachedDatabase>(db);
 	auto &config = DBConfig::GetConfig(db);
 	path_manager = config.path_manager;

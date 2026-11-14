@@ -1,3 +1,4 @@
+#include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/string_vector.hpp"
@@ -58,6 +59,32 @@ struct RegexpStringSplit {
 	}
 };
 
+struct RegexpSplitBindData final : public RegexpMatchesBindData {
+	RegexpSplitBindData(const RegexpMatchesBindData &matches, bool ignore_degenerate)
+	    : RegexpMatchesBindData(matches.options, matches.constant_string, matches.constant_pattern, matches.range_min,
+	                            matches.range_max, matches.range_success),
+	      ignore_degenerate(ignore_degenerate) {
+	}
+
+	bool ignore_degenerate;
+
+	unique_ptr<FunctionData> Copy() const final {
+		return make_uniq<RegexpSplitBindData>(*this, ignore_degenerate);
+	}
+
+	bool Equals(const FunctionData &other_p) const final {
+		return RegexpMatchesBindData::Equals(other_p) &&
+		       ignore_degenerate == other_p.Cast<RegexpSplitBindData>().ignore_degenerate;
+	}
+};
+
+unique_ptr<FunctionData> RegexpSplitBind(BindScalarFunctionInput &input) {
+	auto matches = RegexpMatchesBind(input);
+	return make_uniq<RegexpSplitBindData>(matches->Cast<RegexpMatchesBindData>(),
+	                                      Catalog::DefaultCompatibility(input.GetClientContext()) ==
+	                                          SqlCompatibility::POSTGRES);
+}
+
 struct StringSplitter {
 	template <class OP, class CB>
 	static idx_t Split(string_t input, string_t delim, void *data, CB &&emit) {
@@ -94,10 +121,39 @@ struct StringSplitter {
 		list_idx++;
 		return list_idx;
 	}
+
+	template <class OP, class CB>
+	static void SplitIgnoringDegenerate(string_t input, string_t delim, void *data, CB &&emit) {
+		auto input_data = input.GetData();
+		auto input_size = input.GetSize();
+		idx_t start = 0;
+		idx_t prev_match_end = 0;
+		for (idx_t search = 0; search <= input_size;) {
+			idx_t match_size = 0;
+			auto pos = OP::Find(input_data, input_size, search, delim.GetData(), delim.GetSize(), match_size, data);
+			if (pos > input_size) {
+				break;
+			}
+			auto match_end = pos + match_size;
+			if (pos < input_size && match_end > prev_match_end) {
+				emit(input_data + start, pos - start);
+				start = match_end;
+			}
+			prev_match_end = match_end;
+			search = match_end;
+			if (match_size == 0) {
+				do {
+					search++;
+				} while (search < input_size && !IsCharacter(input_data[search]));
+			}
+		}
+		emit(input_data + start, input_size - start);
+	}
 };
 
 template <class OP, class GET_DATA>
-void StringSplitExecutor(DataChunk &args, ExpressionState &state, Vector &result, GET_DATA &&get_data) {
+void StringSplitExecutor(DataChunk &args, ExpressionState &state, Vector &result, GET_DATA &&get_data,
+                         bool ignore_degenerate) {
 	auto input_entries = args.data[0].Values<string_t>();
 	auto delim_entries = args.data[1].Values<string_t>();
 
@@ -157,21 +213,26 @@ void StringSplitExecutor(DataChunk &args, ExpressionState &state, Vector &result
 			continue;
 		}
 		auto delim = delim_entry.GetValue();
-		StringSplitter::Split<OP>(
-		    input_entry.GetValue(), delim, get_data(delim), [&](const char *split_data, idx_t split_size) {
-			    if (OP::VERIFY_UTF8) {
-				    regexp_util::VerifyUTF8Result(split_data, split_size);
-			    }
-			    list.WriteElement().WriteStringRef(string_t(split_data, UnsafeNumericCast<uint32_t>(split_size)));
-			    count_element();
-		    });
+		auto emit = [&](const char *split_data, idx_t split_size) {
+			if (OP::VERIFY_UTF8) {
+				regexp_util::VerifyUTF8Result(split_data, split_size);
+			}
+			list.WriteElement().WriteStringRef(string_t(split_data, UnsafeNumericCast<uint32_t>(split_size)));
+			count_element();
+		};
+		if (ignore_degenerate) {
+			StringSplitter::SplitIgnoringDegenerate<OP>(input_entry.GetValue(), delim, get_data(delim), emit);
+		} else {
+			StringSplitter::Split<OP>(input_entry.GetValue(), delim, get_data(delim), emit);
+		}
 	}
 
 	StringVector::AddHeapReference(ListVector::GetChildMutable(result), args.data[0]);
 }
 
 void StringSplitFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	StringSplitExecutor<RegularStringSplit>(args, state, result, [](const string_t &) -> void * { return nullptr; });
+	StringSplitExecutor<RegularStringSplit>(
+	    args, state, result, [](const string_t &) -> void * { return nullptr; }, false);
 }
 
 string_t SplitPart(const string_t &input, const string_t &delimiter, int64_t position, vector<idx_t> &delimiters) {
@@ -236,17 +297,19 @@ void SplitPartFunction(DataChunk &args, ExpressionState &state, Vector &result) 
 
 void StringSplitRegexFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-	auto &info = func_expr.BindInfo()->Cast<RegexpMatchesBindData>();
+	auto &info = func_expr.BindInfo()->Cast<RegexpSplitBindData>();
 	if (info.constant_pattern) {
 		// fast path: pre-compiled regex
 		auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<RegexLocalState>();
-		StringSplitExecutor<RegexpStringSplit>(args, state, result,
-		                                       [&](const string_t &) -> void * { return &lstate.constant_pattern; });
+		StringSplitExecutor<RegexpStringSplit>(
+		    args, state, result, [&](const string_t &) -> void * { return &lstate.constant_pattern; },
+		    info.ignore_degenerate);
 	} else {
 		auto &cache = ExecuteFunctionState::GetFunctionState(state)->Cast<RegexPatternCacheState>().cache;
-		StringSplitExecutor<RegexpStringSplit>(args, state, result, [&](const string_t &delim) -> void * {
-			return &cache.Get(regexp_util::CreateStringPiece(delim));
-		});
+		StringSplitExecutor<RegexpStringSplit>(
+		    args, state, result,
+		    [&](const string_t &delim) -> void * { return &cache.Get(regexp_util::CreateStringPiece(delim)); },
+		    info.ignore_degenerate);
 	}
 }
 
@@ -275,7 +338,7 @@ ScalarFunction SplitPartFun::GetFunction() {
 ScalarFunctionSet StringSplitRegexFun::GetFunctions() {
 	auto varchar_list_type = LogicalType::LIST(LogicalType::VARCHAR);
 	ScalarFunctionSet regexp_split;
-	ScalarFunction regex_fun({}, varchar_list_type, StringSplitRegexFunction, RegexpMatchesBind, nullptr,
+	ScalarFunction regex_fun({}, varchar_list_type, StringSplitRegexFunction, RegexpSplitBind, nullptr,
 	                         RegexInitLocalState, LogicalType::INVALID, FunctionStability::CONSISTENT,
 	                         FunctionNullHandling::SPECIAL_HANDLING);
 	regex_fun.GetSignature().AddParameter("string", LogicalType::VARCHAR).AddParameter("regex", LogicalType::VARCHAR);

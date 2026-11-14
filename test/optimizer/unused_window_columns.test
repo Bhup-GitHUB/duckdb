@@ -357,7 +357,6 @@ SELECT currval('separate_lambda_sequence');
 6
 
 # Volatility is local to the window expression, not propagated through column bindings.
-# Removing the window lets normal projection pruning remove its unused input expression.
 statement ok
 CREATE SEQUENCE indirect_window_sequence;
 
@@ -372,7 +371,7 @@ SELECT count(*) FROM (
 query I
 SELECT last_value FROM duckdb_sequences() WHERE sequence_name = 'indirect_window_sequence';
 ----
-NULL
+3
 
 # A live window must keep the same input expression and its evaluation.
 query I
@@ -386,4 +385,4 @@ SELECT sum(rn) FROM (
 query I
 SELECT last_value FROM duckdb_sequences() WHERE sequence_name = 'indirect_window_sequence';
 ----
-3
+6

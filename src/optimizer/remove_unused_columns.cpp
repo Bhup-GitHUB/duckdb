@@ -244,6 +244,17 @@ idx_t BaseColumnPruner::ReplaceBinding(ColumnBinding current_binding, ColumnBind
 	return created_bindings;
 }
 
+void RemoveUnusedColumns::ReferenceVolatile(const vector<unique_ptr<Expression>> &expressions, TableIndex table_idx) {
+	if (everything_referenced) {
+		return;
+	}
+	for (idx_t i = 0; i < expressions.size(); i++) {
+		if (expressions[i]->IsVolatile()) {
+			column_references.emplace(ColumnBinding(table_idx, ProjectionIndex(i)), ReferencedColumn());
+		}
+	}
+}
+
 template <class T>
 void RemoveUnusedColumns::ClearUnusedExpressions(vector<T> &list, TableIndex table_idx, bool replace) {
 	D_ASSERT(mode == RemoveUnusedColumnsMode::APPLY);
@@ -554,14 +565,7 @@ void RemoveUnusedColumns::PruneOperator(unique_ptr<LogicalOperator> &op_ref) {
 		auto &window = op.Cast<LogicalWindow>();
 		// Preserve volatile evaluation within the window expression, even when its output is unused.
 		// Column references do not propagate volatility from their producers.
-		if (!everything_referenced) {
-			for (idx_t i = 0; i < window.expressions.size(); i++) {
-				if (window.expressions[i]->IsVolatile()) {
-					column_references.emplace(ColumnBinding(window.window_index, ProjectionIndex(i)),
-					                          ReferencedColumn());
-				}
-			}
-		}
+		ReferenceVolatile(window.expressions, window.window_index);
 		if (analyze) {
 			// Windows also pass through child columns, so retain the existing references.
 			for (idx_t i = 0; i < window.expressions.size(); i++) {
@@ -600,6 +604,7 @@ void RemoveUnusedColumns::PruneOperator(unique_ptr<LogicalOperator> &op_ref) {
 	case LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY: {
 		// aggregate
 		auto &aggr = op.Cast<LogicalAggregate>();
+		ReferenceVolatile(aggr.expressions, aggr.aggregate_index);
 		if (analyze) {
 			RemoveUnusedColumns remove(*this, everything_referenced);
 			for (auto &group : aggr.groups) {
@@ -808,6 +813,7 @@ void RemoveUnusedColumns::PruneOperator(unique_ptr<LogicalOperator> &op_ref) {
 	}
 	case LogicalOperatorType::LOGICAL_PROJECTION: {
 		auto &proj = op.Cast<LogicalProjection>();
+		ReferenceVolatile(proj.expressions, proj.table_index);
 		if (analyze) {
 			RemoveUnusedColumns remove(*this, false);
 			for (idx_t i = 0; i < proj.expressions.size(); i++) {

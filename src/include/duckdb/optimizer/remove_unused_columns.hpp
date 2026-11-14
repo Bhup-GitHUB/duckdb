@@ -170,6 +170,7 @@ private:
 	                        bool apply_secure_views);
 	template <class T>
 	void ClearUnusedExpressions(vector<T> &list, TableIndex table_idx, bool replace = true);
+	void ReferenceVolatile(const vector<unique_ptr<Expression>> &expressions, TableIndex table_idx);
 	void RecordSecureViewReplacement(ColumnBinding old_binding, ColumnBinding new_binding,
 	                                 unique_ptr<Expression> expression = nullptr);
 	void ApplySecureViewReplacements();

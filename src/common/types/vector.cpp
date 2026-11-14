@@ -23,6 +23,8 @@
 #include "duckdb/common/types/geometry.hpp"
 #include "duckdb/main/config.hpp"
 
+#include <span>
+
 namespace duckdb {
 
 enum class VectorConstructorAction { REFERENCE_VECTOR };
@@ -503,6 +505,147 @@ void Vector::Shred(Vector &shredded_data, idx_t capacity) {
 	this->buffer = make_buffer<ShreddedVectorBuffer>(shredded_data, count_t(capacity));
 }
 
+namespace {
+
+struct SerializedPart {
+	const Vector *vector = nullptr;
+	UnifiedVectorFormat format;
+	idx_t count = 0;
+};
+
+bool IsSerializedFlat(const LogicalType &type) {
+	const auto physical = type.InternalType();
+	return type.id() != LogicalTypeId::GEOMETRY && (TypeIsConstantSize(physical) || physical == PhysicalType::VARCHAR);
+}
+
+template <class PUT, class ALLOC, class FILL>
+void FillPart(PUT &put, ALLOC &alloc, idx_t size, FILL fill) {
+	if (size == 0) {
+		return;
+	}
+	if (const auto target = alloc(size)) {
+		fill(target);
+		return;
+	}
+	const auto temp = make_unsafe_uniq_array_uninitialized<data_t>(size);
+	fill(temp.get());
+	put(temp.get(), size);
+}
+
+void WriteValidity(Serializer &serializer, std::span<const SerializedPart> parts, idx_t count) {
+	const auto size = ValidityMask::ValidityMaskSize(count);
+	serializer.WritePropertyInParts(101, "validity", size, [&](auto put, auto alloc) {
+		FillPart(put, alloc, size, [&](data_ptr_t target) {
+			auto word = ~validity_t(0);
+			idx_t bit = 0;
+			for (const auto &part : parts) {
+				for (idx_t i = 0; i < part.count; i++) {
+					if (!part.format.validity.RowIsValid(part.format.sel->get_index(i))) {
+						word &= ~(validity_t(1) << bit);
+					}
+					if (++bit != ValidityMask::BITS_PER_VALUE) {
+						continue;
+					}
+					Store<validity_t>(word, target);
+					target += sizeof(validity_t);
+					word = ~validity_t(0);
+					bit = 0;
+				}
+			}
+			if (bit != 0) {
+				Store<validity_t>(word, target);
+			}
+		});
+	});
+}
+
+void WriteFixedSize(Serializer &serializer, PhysicalType physical, std::span<const SerializedPart> parts, idx_t count) {
+	const auto width = GetTypeIdSize(physical);
+	serializer.WritePropertyInParts(102, "data", width * count, [&](auto put, auto alloc) {
+		for (const auto &part : parts) {
+			const auto bytes = width * part.count;
+			if (part.vector->GetVectorType() == VectorType::FLAT_VECTOR && !part.format.validity.CanHaveNull()) {
+				put(FlatVector::GetData(*part.vector), bytes);
+				continue;
+			}
+			FillPart(put, alloc, bytes,
+			         [&](data_ptr_t target) { VectorOperations::WriteToStorage(*part.vector, target); });
+		}
+	});
+}
+
+void WriteStrings(Serializer &serializer, std::span<const SerializedPart> parts, idx_t count) {
+	if (!serializer.ShouldSerialize(StorageVersion::V2_0_0)) {
+		size_t at = 0;
+		idx_t row = 0;
+		serializer.WriteList(102, "data", count, [&](Serializer::List &list, idx_t) {
+			while (row == parts[at].count) {
+				++at;
+				row = 0;
+			}
+			const auto &part = parts[at];
+			const auto idx = part.format.sel->get_index(row++);
+			const auto strings = UnifiedVectorFormat::GetData<string_t>(part.format);
+			list.WriteElement(part.format.validity.RowIsValid(idx) ? strings[idx] : NullValue<string_t>());
+		});
+		return;
+	}
+	const auto for_each = [&](auto &&visit) {
+		for (const auto &part : parts) {
+			const auto strings = UnifiedVectorFormat::GetData<string_t>(part.format);
+			for (idx_t i = 0; i < part.count; i++) {
+				const auto idx = part.format.sel->get_index(i);
+				visit(part.format.validity.RowIsValid(idx) ? &strings[idx] : nullptr);
+			}
+		}
+	};
+	idx_t byte_data_length = 0;
+	for_each([&](const string_t *str) {
+		if (str) {
+			byte_data_length += str->GetSize();
+		}
+	});
+	serializer.WriteProperty(107, "byte_data_length", optional_idx(byte_data_length));
+	const auto length_data_length = sizeof(uint32_t) * count;
+	serializer.WritePropertyInParts(108, "length_data", length_data_length, [&](auto put, auto alloc) {
+		FillPart(put, alloc, length_data_length, [&](data_ptr_t target) {
+			for_each([&](const string_t *str) {
+				Store<uint32_t>(str ? UnsafeNumericCast<uint32_t>(str->GetSize()) : 0, target);
+				target += sizeof(uint32_t);
+			});
+		});
+	});
+	serializer.WritePropertyInParts(109, "byte_data", byte_data_length, [&](auto put, auto alloc) {
+		FillPart(put, alloc, byte_data_length, [&](data_ptr_t target) {
+			for_each([&](const string_t *str) {
+				if (str) {
+					memcpy(target, str->GetData(), str->GetSize());
+					target += str->GetSize();
+				}
+			});
+		});
+	});
+}
+
+void WriteFlat(Serializer &serializer, const LogicalType &type, std::span<const SerializedPart> parts, idx_t count) {
+	bool has_validity_mask = false;
+	for (const auto &part : parts) {
+		has_validity_mask = has_validity_mask || (part.count > 0 && part.format.validity.CanHaveNull());
+	}
+	serializer.WriteProperty(100, "has_validity_mask", has_validity_mask);
+	if (has_validity_mask) {
+		WriteValidity(serializer, parts, count);
+	}
+	const auto physical = type.InternalType();
+	if (TypeIsConstantSize(physical)) {
+		WriteFixedSize(serializer, physical, parts, count);
+	} else {
+		WriteStrings(serializer, parts, count);
+	}
+}
+
+} // namespace
+
 // FIXME: This should ideally be const
 void Vector::Serialize(Serializer &serializer, bool compressed_serialization) {
 	auto &logical_type = GetType();
@@ -526,6 +669,11 @@ void Vector::Serialize(Serializer &serializer, bool compressed_serialization) {
 		return;
 	}
 	ToUnifiedFormat(vdata);
+	if (IsSerializedFlat(logical_type)) {
+		const SerializedPart part {.vector = this, .format = std::move(vdata), .count = count};
+		WriteFlat(serializer, logical_type, {&part, 1}, count);
+		return;
+	}
 
 	if (logical_type.id() == LogicalTypeId::GEOMETRY && serializer.ShouldSerialize(Geometry::VERSION_ADDED)) {
 		serializer.WriteProperty<GeometryStorageType>(99, "geometry_format", GeometryStorageType::WKB);
@@ -543,13 +691,7 @@ void Vector::Serialize(Serializer &serializer, bool compressed_serialization) {
 		serializer.WriteProperty(101, "validity", const_data_ptr_cast(flat_mask.GetData()),
 		                         flat_mask.ValidityMaskSize(count));
 	}
-	if (TypeIsConstantSize(logical_type.InternalType())) {
-		// constant size type: simple copy
-		idx_t write_size = GetTypeIdSize(logical_type.InternalType()) * count;
-		auto ptr = make_unsafe_uniq_array_uninitialized<data_t>(write_size);
-		VectorOperations::WriteToStorage(*this, ptr.get());
-		serializer.WriteProperty(102, "data", ptr.get(), write_size);
-	} else if (logical_type.id() == LogicalTypeId::GEOMETRY) {
+	if (logical_type.id() == LogicalTypeId::GEOMETRY) {
 		auto geoms = UnifiedVectorFormat::GetData<string_t>(vdata);
 
 		// Are we targeting an older serialization version?
@@ -575,51 +717,6 @@ void Vector::Serialize(Serializer &serializer, bool compressed_serialization) {
 		}
 	} else {
 		switch (logical_type.InternalType()) {
-		case PhysicalType::VARCHAR: {
-			auto strings = UnifiedVectorFormat::GetData<string_t>(vdata);
-			// new way to serialize strings, two blobs, first lengths, then string bytes
-			if (serializer.ShouldSerialize(StorageVersion::V2_0_0)) {
-				// we write all the lengths whether the string is null or not. lets not pull a parquet.
-				auto length_data_length = sizeof(uint32_t) * count;
-				auto length_data = make_unsafe_uniq_array_uninitialized<data_t>(length_data_length);
-				idx_t byte_data_length = 0;
-
-				// write all the lengths
-				auto lengths_write_ptr = reinterpret_cast<uint32_t *>(length_data.get());
-				for (idx_t i = 0; i < count; i++) {
-					auto idx = vdata.sel->get_index(i);
-					auto this_length = vdata.validity.RowIsValid(idx) ? strings[idx].GetSize() : 0;
-					lengths_write_ptr[i] = UnsafeNumericCast<uint32_t>(this_length);
-					byte_data_length += this_length;
-				}
-
-				// write the bytes
-				auto byte_data = make_unsafe_uniq_array_uninitialized<data_t>(byte_data_length);
-				// write the non-null strings
-				auto string_write_ptr = byte_data.get();
-				for (idx_t i = 0; i < count; i++) {
-					auto idx = vdata.sel->get_index(i);
-					if (!vdata.validity.RowIsValid(idx)) {
-						continue;
-					}
-					auto this_length = strings[idx].GetSize();
-					memcpy(string_write_ptr, strings[idx].GetData(), this_length);
-					string_write_ptr += this_length;
-				}
-				serializer.WriteProperty(107, "byte_data_length", optional_idx(byte_data_length));
-				// we do not encode length_data_length because its not required
-				serializer.WriteProperty(108, "length_data", length_data.get(), length_data_length);
-				serializer.WriteProperty(109, "byte_data", byte_data.get(), byte_data_length);
-			} else { // old and slow way: list
-				serializer.WriteList(102, "data", count, [&](Serializer::List &list, idx_t i) {
-					auto idx = vdata.sel->get_index(i);
-					auto str = !vdata.validity.RowIsValid(idx) ? NullValue<string_t>() : strings[idx];
-					list.WriteElement(str);
-				});
-			}
-
-			break;
-		}
 		case PhysicalType::STRUCT: {
 			auto &entries = StructVector::GetEntries(*this);
 
@@ -719,10 +816,8 @@ void Vector::Deserialize(Deserializer &deserializer, idx_t count) {
 	if (TypeIsConstantSize(logical_type.InternalType())) {
 		// constant size type: read fixed amount of data
 		auto column_size = GetTypeIdSize(logical_type.InternalType()) * count;
-		auto ptr = make_unsafe_uniq_array_uninitialized<data_t>(column_size);
-		deserializer.ReadProperty(102, "data", ptr.get(), column_size);
-
-		VectorOperations::ReadFromStorage(ptr.get(), count, *this);
+		FlatVector::SetSize(*this, count);
+		deserializer.ReadProperty(102, "data", FlatVector::GetDataMutable(*this), column_size);
 	} else if (logical_type.id() == LogicalTypeId::GEOMETRY) {
 		auto blobs = FlatVector::GetDataMutable<string_t>(*this);
 

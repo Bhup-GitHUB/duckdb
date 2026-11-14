@@ -178,4 +178,29 @@ void BinarySerializer::WriteDataPtr(const_data_ptr_t ptr, idx_t count) {
 	WriteData(ptr, count);
 }
 
+void BinarySerializer::BeginDataParts(idx_t size) {
+	D_ASSERT(parts_left == 0);
+	VarIntEncode(static_cast<uint64_t>(size));
+	parts_left = size;
+}
+
+void BinarySerializer::WriteDataPart(const_data_ptr_t ptr, idx_t count) {
+	D_ASSERT(count <= parts_left);
+	WriteData(ptr, count);
+	parts_left -= count;
+}
+
+data_ptr_t BinarySerializer::AllocDataPart(idx_t count) {
+	D_ASSERT(count <= parts_left);
+	const auto allocated = stream.Alloc(count);
+	if (allocated) {
+		parts_left -= count;
+	}
+	return allocated;
+}
+
+void BinarySerializer::EndDataParts() {
+	D_ASSERT(parts_left == 0);
+}
+
 } // namespace duckdb

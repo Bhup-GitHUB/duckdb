@@ -20,6 +20,10 @@ public:
 	// Writes a set amount of data from the specified buffer into the stream and moves the stream forward accordingly
 	virtual void WriteData(const_data_ptr_t buffer, idx_t write_size) = 0;
 
+	virtual data_ptr_t Alloc(idx_t size) {
+		return nullptr;
+	}
+
 	// Writes a type into the stream and moves the stream forward sizeof(T) bytes
 	// The type must be a standard layout type
 	template <class T>

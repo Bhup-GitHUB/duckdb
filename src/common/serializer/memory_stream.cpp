@@ -64,6 +64,13 @@ void MemoryStream::WriteData(const_data_ptr_t source, idx_t write_size) {
 	position += write_size;
 }
 
+data_ptr_t MemoryStream::Alloc(idx_t size) {
+	GrowCapacity(size);
+	const auto allocated = data + position;
+	position += size;
+	return allocated;
+}
+
 void MemoryStream::GrowCapacity(idx_t write_size) {
 	const auto old_capacity = capacity;
 	while (position + write_size > capacity) {

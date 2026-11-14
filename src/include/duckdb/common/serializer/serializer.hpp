@@ -15,6 +15,7 @@
 #include "duckdb/common/types/interval.hpp"
 #include "duckdb/common/types/string_type.hpp"
 #include "duckdb/common/types/uhugeint.hpp"
+#include "duckdb/common/unique_ptr.hpp"
 #include "duckdb/common/unordered_map.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/queue.hpp"
@@ -53,6 +54,11 @@ class Serializer {
 protected:
 	SerializationOptions options;
 	SerializationData data;
+
+private:
+	unsafe_unique_array<data_t> parts;
+	idx_t parts_size = 0;
+	idx_t parts_written = 0;
 
 public:
 	virtual ~Serializer() {
@@ -195,6 +201,16 @@ public:
 	void WriteProperty(this auto &self, const field_id_t field_id, const char *tag, const_data_ptr_t ptr, idx_t count) {
 		self.OnPropertyBegin(field_id, tag);
 		self.WriteDataPtr(ptr, count);
+		self.OnPropertyEnd();
+	}
+
+	template <class FUNC>
+	void WritePropertyInParts(this auto &self, const field_id_t field_id, const char *tag, idx_t size, FUNC write) {
+		self.OnPropertyBegin(field_id, tag);
+		self.BeginDataParts(size);
+		write([&](const_data_ptr_t ptr, idx_t count) { self.WriteDataPart(ptr, count); },
+		      [&](idx_t count) { return self.AllocDataPart(count); });
+		self.EndDataParts();
 		self.OnPropertyEnd();
 	}
 
@@ -472,6 +488,10 @@ public:
 	virtual void WriteValue(const string &value) = 0;
 	virtual void WriteValue(const char *str) = 0;
 	virtual void WriteDataPtr(const_data_ptr_t ptr, idx_t count) = 0;
+	virtual void BeginDataParts(idx_t size);
+	virtual void WriteDataPart(const_data_ptr_t ptr, idx_t count);
+	virtual data_ptr_t AllocDataPart(idx_t count);
+	virtual void EndDataParts();
 	//! Identifiers are serialized identically to a plain string (preserving the original casing)
 	void WriteValue(this auto &self, const Identifier &value) {
 		self.WriteValue(value.GetIdentifierName());

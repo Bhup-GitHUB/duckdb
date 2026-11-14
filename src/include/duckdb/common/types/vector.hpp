@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <span>
+
 #include "duckdb/common/vector/unified_vector_format.hpp"
 #include "duckdb/common/types/vector_buffer.hpp"
 #include "duckdb/common/vector_size.hpp"
@@ -169,6 +171,8 @@ public:
 	Resize(idx_t current_size, idx_t to_reserve);
 
 	DUCKDB_API void Serialize(Serializer &serializer, bool compressed_serialization = true);
+	DUCKDB_API static void SerializeParts(Serializer &serializer, const LogicalType &type,
+	                                      std::span<const Vector *const> parts);
 	DUCKDB_API void Deserialize(Deserializer &deserializer, idx_t count);
 
 	//! Returns the uncompressed size of the data stored within this vector

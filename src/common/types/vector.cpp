@@ -646,6 +646,28 @@ void WriteFlat(Serializer &serializer, const LogicalType &type, std::span<const 
 
 } // namespace
 
+void Vector::SerializeParts(Serializer &serializer, const LogicalType &type, std::span<const Vector *const> parts) {
+	idx_t count = 0;
+	for (const auto *part : parts) {
+		count += part->size();
+	}
+	if (!IsSerializedFlat(type)) {
+		Vector joined(type, count);
+		for (const auto *part : parts) {
+			joined.Append(*part, part->size());
+		}
+		joined.Serialize(serializer);
+		return;
+	}
+	vector<SerializedPart> serialized(parts.size());
+	for (idx_t i = 0; i < parts.size(); i++) {
+		serialized[i].vector = parts[i];
+		serialized[i].count = parts[i]->size();
+		parts[i]->ToUnifiedFormat(serialized[i].format);
+	}
+	WriteFlat(serializer, type, serialized, count);
+}
+
 // FIXME: This should ideally be const
 void Vector::Serialize(Serializer &serializer, bool compressed_serialization) {
 	auto &logical_type = GetType();

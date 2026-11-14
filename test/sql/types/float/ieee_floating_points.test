@@ -71,6 +71,17 @@ inf	NULL
 statement ok
 SET error_on_division_by_zero = true;
 
+# NaN divided by zero stays NaN
+query II
+SELECT 'nan'::{type} / 0::{type}, 'nan'::{type} % 0::{type}
+----
+nan	nan
+
+statement error
+SELECT 1::{type} / 0::{type}
+----
+Division by zero
+
 # math domain cases still error when IEEE behavior is disabled
 statement ok
 SET ieee_floating_point_ops = false;

@@ -1287,6 +1287,11 @@ struct BinaryZeroCheckWrapper {
 	static inline RESULT_TYPE Operation(FUNC fun, LEFT_TYPE left, RIGHT_TYPE right, ValidityMask &mask, idx_t idx) {
 		if (right == 0) {
 			if (!NULL_ON_ZERO) {
+				if constexpr (std::is_floating_point_v<LEFT_TYPE>) {
+					if (Value::IsNan(left)) {
+						return OP::template Operation<LEFT_TYPE, RIGHT_TYPE, RESULT_TYPE>(left, right);
+					}
+				}
 				ThrowDivisionByZero(fun.get());
 			}
 			mask.SetInvalid(idx);

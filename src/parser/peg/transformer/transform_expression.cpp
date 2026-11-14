@@ -1478,6 +1478,48 @@ static unique_ptr<ParsedExpression> TransformOperatorFunction(const string &oper
 	return std::move(result);
 }
 
+static string BuiltinOperatorName(const string &operator_name) {
+	auto split_operator = StringUtil::Split(operator_name, ".");
+	if (split_operator.size() == 1) {
+		return operator_name;
+	}
+	if (split_operator.size() == 2 && StringUtil::CIEquals(split_operator.front(), "pg_catalog")) {
+		return split_operator.back();
+	}
+	return string();
+}
+
+static unique_ptr<ParsedExpression> TransformBinaryOperator(PEGTransformer &transformer, const string &operator_name,
+                                                            vector<unique_ptr<ParsedExpression>> children) {
+	const auto op = BuiltinOperatorName(operator_name);
+	if (op == "#>" || op == "#>>") {
+		auto json = make_uniq<FunctionExpression>(
+		    Identifier(op == "#>" ? "pg_json_extract_path" : "pg_json_extract_path_text"), std::move(children));
+		json->IsOperatorMutable() = true;
+		return std::move(json);
+	}
+	string regex_function_name;
+	bool regex_negated;
+	bool regex_case_insensitive;
+	if (!op.empty() &&
+	    TryGetRegexMatchOperator(op, transformer, regex_function_name, regex_negated, regex_case_insensitive)) {
+		if (regex_case_insensitive) {
+			children.push_back(ConstantExpression::String("i"));
+		}
+		auto regex = make_uniq<FunctionExpression>(Identifier(regex_function_name), std::move(children));
+		regex->IsOperatorMutable() = !regex_negated;
+		if (!regex_negated) {
+			return std::move(regex);
+		}
+		transformer.AddDepth(1);
+		return make_uniq<OperatorExpression>(ExpressionType::OPERATOR_NOT, std::move(regex));
+	}
+	if (const auto comparison = OperatorToExpressionType(op); comparison != ExpressionType::INVALID) {
+		return make_uniq<ComparisonExpression>(comparison, std::move(children[0]), std::move(children[1]));
+	}
+	return TransformOperatorFunction(operator_name, std::move(children));
+}
+
 unique_ptr<ParsedExpression>
 PEGTransformerFactory::TransformInfixOtherOperatorExpression(PEGTransformer &transformer,
                                                              unique_ptr<ParsedExpression> bitwise_expression,
@@ -1490,7 +1532,10 @@ PEGTransformerFactory::TransformInfixOtherOperatorExpression(PEGTransformer &tra
 	for (auto &other_operator_expr : *other_operator_tail) {
 		auto right_expr = std::move(other_operator_expr.expression);
 		if (other_operator_expr.op.is_any_all) {
-			auto op_string = other_operator_expr.op.name;
+			auto op_string = BuiltinOperatorName(other_operator_expr.op.name);
+			if (op_string.empty()) {
+				op_string = other_operator_expr.op.name;
+			}
 			auto is_any = other_operator_expr.op.is_any;
 
 			// Map operator string to ExpressionType (INVALID if not a comparison operator)
@@ -1640,41 +1685,10 @@ PEGTransformerFactory::TransformInfixOtherOperatorExpression(PEGTransformer &tra
 				return std::move(subquery_expr);
 			}
 		} else {
-			auto other_operator = std::move(other_operator_expr.op.name);
 			vector<unique_ptr<ParsedExpression>> children_function;
 			children_function.push_back(std::move(expr));
 			children_function.push_back(std::move(right_expr));
-			if (other_operator == "#>" || other_operator == "#>>") {
-				auto json_func_name = (other_operator == "#>") ? "pg_json_extract_path" : "pg_json_extract_path_text";
-				auto json_func_expr =
-				    make_uniq<FunctionExpression>(Identifier(json_func_name), std::move(children_function));
-				json_func_expr->IsOperatorMutable() = true;
-				expr = std::move(json_func_expr);
-				continue;
-			}
-			// PG regex operators reached this path via OPERATOR(schema.op); rewrite to the configured regex match call.
-			auto split_operator = StringUtil::Split(other_operator, ".");
-			string regex_function_name;
-			bool regex_negated;
-			bool regex_case_insensitive;
-			if (split_operator.size() <= 2 &&
-			    TryGetRegexMatchOperator(split_operator.back(), transformer, regex_function_name, regex_negated,
-			                             regex_case_insensitive)) {
-				if (regex_case_insensitive) {
-					children_function.push_back(ConstantExpression::String("i"));
-				}
-				auto regex_func_expr =
-				    make_uniq<FunctionExpression>(Identifier(regex_function_name), std::move(children_function));
-				regex_func_expr->IsOperatorMutable() = !regex_negated;
-				if (regex_negated) {
-					expr = make_uniq<OperatorExpression>(ExpressionType::OPERATOR_NOT, std::move(regex_func_expr));
-					transformer.AddDepth(1);
-				} else {
-					expr = std::move(regex_func_expr);
-				}
-				continue;
-			}
-			expr = TransformOperatorFunction(other_operator, std::move(children_function));
+			expr = TransformBinaryOperator(transformer, other_operator_expr.op.name, std::move(children_function));
 		}
 	}
 	return expr;

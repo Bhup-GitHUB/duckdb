@@ -677,6 +677,10 @@ vector<shared_ptr<AttachedDatabase>> DatabaseManager::GetDatabases(ClientContext
 		if (max_db_count.IsValid() && count >= max_db_count.GetIndex()) {
 			break;
 		}
+		if (const auto owner = entry.second->Owner();
+		    owner.IsValid() && owner.GetIndex() != context.GetConnectionId()) {
+			continue;
+		}
 		result.push_back(entry.second);
 		count++;
 	}

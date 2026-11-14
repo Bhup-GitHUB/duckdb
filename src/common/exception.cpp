@@ -272,6 +272,9 @@ NotImplementedException::NotImplementedException(std::string_view msg)
 OutOfRangeException::OutOfRangeException(std::string_view msg) : Exception(ExceptionType::OUT_OF_RANGE, msg) {
 }
 
+ObjectSizeException::ObjectSizeException(std::string_view msg) : Exception(ExceptionType::OBJECT_SIZE, msg) {
+}
+
 OutOfRangeException::OutOfRangeException(const int64_t value, const PhysicalType orig_type, const PhysicalType new_type)
     : Exception(ExceptionType::OUT_OF_RANGE, "Type " + TypeIdToString(orig_type) + " with value " +
                                                  to_string((intmax_t)value) +

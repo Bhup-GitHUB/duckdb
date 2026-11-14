@@ -34,6 +34,7 @@ add_library_unity(
   test_buffer_pool_reservation.cpp
   test_storage_fuzz.cpp
   test_strftime.cpp
+  test_string_size_limit.cpp
   test_string_util.cpp
   test_substring_oob.cpp
   test_swar.cpp

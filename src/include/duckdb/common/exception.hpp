@@ -192,6 +192,16 @@ public:
 	DUCKDB_API OutOfRangeException(const PhysicalType var_type, const idx_t length);
 };
 
+class ObjectSizeException : public Exception {
+public:
+	DUCKDB_API explicit ObjectSizeException(std::string_view msg);
+
+	template <typename... ARGS>
+	explicit ObjectSizeException(std::string_view msg, ARGS &&...params)
+	    : ObjectSizeException(ConstructMessage(msg, std::forward<ARGS>(params)...)) {
+	}
+};
+
 class OutOfMemoryException : public Exception {
 public:
 	DUCKDB_API explicit OutOfMemoryException(std::string_view msg);

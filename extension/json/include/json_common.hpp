@@ -247,7 +247,7 @@ public:
 		D_ASSERT(alc);
 		idx_t len;
 		auto data = WriteVal<YYJSON_VAL_T>(val, alc, len);
-		return string_t(data, len);
+		return string_t::Safe({data, len});
 	}
 
 	//! Slow and easy ToString for errors

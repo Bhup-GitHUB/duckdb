@@ -169,23 +169,25 @@ buffer_ptr<VectorBuffer> VectorStringBuffer::FlattenSliceInternal(const LogicalT
 }
 
 string_t StringVector::AddString(Vector &vector, std::string_view data) {
-	return StringVector::AddString(vector, string_t(data.data(), UnsafeNumericCast<uint32_t>(data.size())));
+	return StringVector::AddString(vector, data.data(), data.size());
 }
 
 string_t StringVector::AddString(Vector &vector, const char *data, idx_t len) {
-	return StringVector::AddString(vector, string_t(data, UnsafeNumericCast<uint32_t>(len)));
+	D_ASSERT(vector.GetType().id() == LogicalTypeId::VARCHAR || vector.GetType().id() == LogicalTypeId::BIT);
+	return GetStringHeap(vector).AddString(data, len);
 }
 
 string_t StringVector::AddStringOrBlob(Vector &vector, const char *data, idx_t len) {
-	return StringVector::AddStringOrBlob(vector, string_t(data, UnsafeNumericCast<uint32_t>(len)));
+	D_ASSERT(vector.GetType().InternalType() == PhysicalType::VARCHAR);
+	return GetStringHeap(vector).AddBlob(data, len);
 }
 
 string_t StringVector::AddString(Vector &vector, const char *data) {
-	return StringVector::AddString(vector, string_t(data, UnsafeNumericCast<uint32_t>(strlen(data))));
+	return StringVector::AddString(vector, data, strlen(data));
 }
 
 string_t StringVector::AddString(Vector &vector, const string &data) {
-	return StringVector::AddString(vector, string_t(data.c_str(), UnsafeNumericCast<uint32_t>(data.size())));
+	return StringVector::AddString(vector, data.data(), data.size());
 }
 
 VectorStringBuffer &StringVector::GetStringBuffer(Vector &vector) {

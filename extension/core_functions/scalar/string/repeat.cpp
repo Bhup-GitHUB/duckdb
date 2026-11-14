@@ -33,7 +33,7 @@ static void RepeatFunction(DataChunk &args, ExpressionState &state, Vector &resu
 			    result_str.Finalize();
 			    return result_str;
 		    } else {
-			    throw OutOfRangeException(
+			    throw ObjectSizeException(
 			        "Cannot create a string of size: '%d' * '%d', the maximum supported string size is: '%d'", size_str,
 			        copy_count, string_t::MAX_STRING_SIZE);
 		    }

@@ -61,7 +61,7 @@ static string_t PadString(ExpressionState &state, Vector &result, const string_t
 	auto padding_size = PaddingByteCount(padding_chars, pad);
 	auto result_size = written.first + padding_size;
 	if (result_size > string_t::MAX_STRING_SIZE) {
-		throw OutOfRangeException(
+		throw ObjectSizeException(
 		    "Cannot create a string of size: '%d' in %s, the maximum supported string size is: '%d'", result_size, name,
 		    string_t::MAX_STRING_SIZE);
 	}

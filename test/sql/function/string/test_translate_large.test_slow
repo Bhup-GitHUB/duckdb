@@ -5,4 +5,4 @@
 statement error
 select length(TRANSLATE(repeat('a', 1100000000), 'a', '😀'))
 ----
-<REGEX>:.*Out of Range Error.*maximum supported string size.*
+<REGEX>:.*Object Size Error.*maximum supported string size.*

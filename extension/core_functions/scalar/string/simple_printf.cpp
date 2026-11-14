@@ -167,7 +167,7 @@ bool SimplePrintf::TryExecute(DataChunk &args, Vector &result, bool printf_style
 				AppendArgument(format, args.data[piece.arg].GetType(), format.sel->get_index(row), out);
 			}
 		}
-		writer.WriteValue(string_t(out.data(), UnsafeNumericCast<uint32_t>(out.size())));
+		writer.WriteValue(string_t::Safe(out));
 	}
 	return true;
 }

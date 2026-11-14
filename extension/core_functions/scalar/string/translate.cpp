@@ -107,7 +107,7 @@ static string_t TranslateScalarFunction(const string_t &haystack, const Translat
 	}
 
 	if (result.size() > string_t::MAX_STRING_SIZE) {
-		throw OutOfRangeException(
+		throw ObjectSizeException(
 		    "Cannot create a string of size: '%d' in TRANSLATE, the maximum supported string size is: '%d'",
 		    result.size(), string_t::MAX_STRING_SIZE);
 	}

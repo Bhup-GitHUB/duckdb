@@ -9,6 +9,6 @@ SELECT arg_max(a, b, 1) FROM (VALUES
 	(repeat('z', 2200000000), 2)
 ) t(a, b);
 ----
-Invalid Input Error: Resulting string/blob too large!
+Object Size Error: Resulting string/blob too large!
 
 mode unskip

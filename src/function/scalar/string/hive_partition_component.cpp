@@ -23,7 +23,7 @@ void HivePartitionComponentFunction(DataChunk &args, ExpressionState &state, Vec
 		auto component = HivePartitioning::Escape(name.IsValid() ? name.GetValue().GetString() : "NULL") + "=";
 		component += value.IsValid() ? HivePartitioning::EscapeValue(value.GetValue().GetString())
 		                             : HivePartitioning::DEFAULT_PARTITION_NAME;
-		writer.WriteValue(string_t(component.c_str(), UnsafeNumericCast<uint32_t>(component.size())));
+		writer.WriteValue(string_t::Safe(component));
 	}
 }
 

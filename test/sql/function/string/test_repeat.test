@@ -84,3 +84,13 @@ statement error
 select REPEAT('hello', 'world', 3)
 ----
 
+statement error
+select REPEAT('xx', 2147483648)
+----
+<REGEX>:.*Object Size Error.*maximum supported string size.*
+
+query I
+select TRY(REPEAT('xx', 2147483648)) IS NULL
+----
+true
+

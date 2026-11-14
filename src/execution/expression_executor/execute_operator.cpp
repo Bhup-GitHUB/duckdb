@@ -3,6 +3,7 @@
 #include "duckdb/execution/constant_in_list.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/common/error_data.hpp"
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_map_set.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/map_vector.hpp"
@@ -276,6 +277,7 @@ void ExpressionExecutor::Execute(const BoundOperatorExpression &expr, Expression
 			Execute(*expr.GetChildren()[0], &child_state, sel, count, try_result);
 			result.Reference(try_result);
 			return;
+		} catch (ObjectSizeException &) {
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
 			auto error_type = error.Type();
@@ -302,6 +304,7 @@ void ExpressionExecutor::Execute(const BoundOperatorExpression &expr, Expression
 			try {
 				Execute(*expr.GetChildren()[0], &child_state, &selvec, 1, intermediate.data[0]);
 				val = intermediate.GetValue(0, 0);
+			} catch (ObjectSizeException &) {
 			} catch (std::exception &ex) {
 				ErrorData error(ex);
 				auto error_type = error.Type();

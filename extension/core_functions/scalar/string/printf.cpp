@@ -170,7 +170,7 @@ static void PrintfFunction(DataChunk &args, ExpressionState &state, Vector &resu
 			                            "single byte, use chr(...) to write a Unicode code point",
 			                            string(format_view));
 		}
-		result_data.WriteValue(string_t(formatted.data(), UnsafeNumericCast<uint32_t>(formatted.size())));
+		result_data.WriteValue(string_t::Safe(formatted));
 	}
 }
 

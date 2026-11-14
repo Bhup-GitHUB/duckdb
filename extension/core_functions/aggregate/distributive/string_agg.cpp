@@ -62,7 +62,7 @@ struct StringAggFunction {
 		if (new_size > state.alloc_size && new_size > string_t::INLINE_LENGTH) {
 			// need to (re-)allocate space
 			if (new_size > NumericLimits<uint32_t>::Maximum()) {
-				throw InvalidInputException("string_agg string size exceeds maximum string size");
+				throw ObjectSizeException("string_agg string size exceeds maximum string size");
 			}
 			state.alloc_size = MinValue<idx_t>(NextPowerOfTwo(new_size), string_t::MAX_STRING_SIZE);
 			target_data = char_ptr_cast(allocator.Allocate(state.alloc_size));

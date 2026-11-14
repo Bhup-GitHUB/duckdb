@@ -82,7 +82,7 @@ struct HeapEntry<string_t> {
 			auto new_size = UnsafeNumericCast<uint32_t>(new_val.GetSize());
 			auto new_capacity = NextPowerOfTwo(new_size);
 			if (new_capacity > string_t::MAX_STRING_SIZE) {
-				throw InvalidInputException("Resulting string/blob too large!");
+				throw ObjectSizeException("Resulting string/blob too large!");
 			}
 			capacity = UnsafeNumericCast<uint32_t>(new_capacity);
 			allocated_data = allocator.Allocate(capacity);
@@ -97,7 +97,7 @@ struct HeapEntry<string_t> {
 			auto new_size = UnsafeNumericCast<uint32_t>(new_val.GetSize());
 			auto new_capacity = NextPowerOfTwo(new_size);
 			if (new_capacity > string_t::MAX_STRING_SIZE) {
-				throw InvalidInputException("Resulting string/blob too large!");
+				throw ObjectSizeException("Resulting string/blob too large!");
 			}
 			do {
 				capacity *= 2;

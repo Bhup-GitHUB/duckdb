@@ -24,8 +24,9 @@ public:
 	DUCKDB_API void Move(StringHeap &other);
 
 	inline string_t AddString(const char *data, idx_t len) {
-		D_ASSERT(Value::StringIsValid(data, len));
-		return AddBlob(data, len);
+		auto result = AddBlob(data, len);
+		D_ASSERT(Value::StringIsValid(result.GetData(), result.GetSize()));
+		return result;
 	}
 
 	inline string_t AddString(const char *data) {
@@ -66,9 +67,7 @@ public:
 	inline string_t CreateEmptyStringInHeap(idx_t len) {
 		D_ASSERT(len > string_t::INLINE_LENGTH);
 		if (len > string_t::MAX_STRING_SIZE) {
-			throw OutOfRangeException(
-			    "Cannot create a string of size: '%d', the maximum supported string size is: '%d'", len,
-			    string_t::MAX_STRING_SIZE);
+			string_t::ThrowTooLarge(len);
 		}
 		auto insert_pos = const_char_ptr_cast(allocator.Allocate(len));
 		return string_t(insert_pos, UnsafeNumericCast<uint32_t>(len));

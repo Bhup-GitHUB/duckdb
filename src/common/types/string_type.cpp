@@ -1,6 +1,7 @@
 #include "duckdb/common/types/string_type.hpp"
 
 #include "duckdb/common/algorithm.hpp"
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/bit.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "utf8proc_wrapper.hpp"
@@ -8,6 +9,11 @@
 namespace duckdb {
 constexpr idx_t string_t::MAX_STRING_SIZE;
 constexpr idx_t string_t::INLINE_LENGTH;
+
+void string_t::ThrowTooLarge(idx_t size) {
+	throw ObjectSizeException("Cannot create a string of size: '%d', the maximum supported string size is: '%d'", size,
+	                          MAX_STRING_SIZE);
+}
 
 void string_t::Verify() const {
 #ifdef D_ASSERT_IS_ENABLED

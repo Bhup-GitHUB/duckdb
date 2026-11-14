@@ -18,6 +18,7 @@
 
 #include <cstring>
 #include <algorithm>
+#include <string_view>
 
 namespace duckdb {
 
@@ -29,6 +30,16 @@ public:
 	static constexpr idx_t INLINE_BYTES = 12 * sizeof(char);
 	static constexpr idx_t HEADER_SIZE = sizeof(uint32_t) + PREFIX_BYTES;
 	static constexpr idx_t MAX_STRING_SIZE = NumericLimits<uint32_t>::Maximum();
+	[[noreturn]] DUCKDB_API static void ThrowTooLarge(idx_t size);
+	static string_t Unsafe(std::string_view data) {
+		return string_t(data.data(), UnsafeNumericCast<uint32_t>(data.size()));
+	}
+	static string_t Safe(std::string_view data) {
+		if (data.size() > MAX_STRING_SIZE) {
+			ThrowTooLarge(data.size());
+		}
+		return Unsafe(data);
+	}
 #ifndef DUCKDB_DEBUG_NO_INLINE
 	static constexpr idx_t PREFIX_LENGTH = PREFIX_BYTES;
 	static constexpr idx_t INLINE_LENGTH = INLINE_BYTES;

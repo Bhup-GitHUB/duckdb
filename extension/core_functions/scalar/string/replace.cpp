@@ -47,7 +47,7 @@ static string_t WriteReplaced(const string_t &haystack, const string_t &needle, 
 	auto thread_size = thread.GetSize();
 	auto result_size = haystack_size - positions.size() * needle_size + positions.size() * thread_size;
 	if (result_size > string_t::MAX_STRING_SIZE) {
-		throw OutOfRangeException(
+		throw ObjectSizeException(
 		    "Cannot create a string of size: '%d' in REPLACE, the maximum supported string size is: '%d'", result_size,
 		    string_t::MAX_STRING_SIZE);
 	}

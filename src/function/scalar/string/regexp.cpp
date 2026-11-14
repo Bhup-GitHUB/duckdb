@@ -263,7 +263,7 @@ static bool RegexpGlobalReplace(ExpressionState &state, duckdb_re2::StringPiece 
 			unchecked = 0;
 			state.InterruptCheck();
 			if (out.size() > string_t::MAX_STRING_SIZE) {
-				throw OutOfRangeException("Cannot create a string of size: '%d' in REGEXP_REPLACE, the maximum "
+				throw ObjectSizeException("Cannot create a string of size: '%d' in REGEXP_REPLACE, the maximum "
 				                          "supported string size is: '%d'",
 				                          out.size(), string_t::MAX_STRING_SIZE);
 			}

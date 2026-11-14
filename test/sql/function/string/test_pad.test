@@ -111,27 +111,27 @@ select RPAD('a', 100000000000000000, 0)
 statement error
 select LPAD('', 1100000000, '😀')
 ----
-<REGEX>:.*Out of Range Error.*maximum supported string size.*
+<REGEX>:.*Object Size Error.*maximum supported string size.*
 
 statement error
 select RPAD('', 1100000000, '😀')
 ----
-<REGEX>:.*Out of Range Error.*maximum supported string size.*
+<REGEX>:.*Object Size Error.*maximum supported string size.*
 
 statement error
 select LPAD('😀😀', 1073741824, '😀')
 ----
-<REGEX>:.*Out of Range Error.*maximum supported string size.*
+<REGEX>:.*Object Size Error.*maximum supported string size.*
 
 statement error
 select RPAD('😀😀', 1073741824, '😀')
 ----
-<REGEX>:.*Out of Range Error.*maximum supported string size.*
+<REGEX>:.*Object Size Error.*maximum supported string size.*
 
 statement error
 select LPAD('abc', 2147483647, 'xyz😀😀')
 ----
-<REGEX>:.*Out of Range Error.*maximum supported string size.*
+<REGEX>:.*Object Size Error.*maximum supported string size.*
 
 query I
 select LPAD('ab', 7, 'xy😀')

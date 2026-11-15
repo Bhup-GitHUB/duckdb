@@ -104,6 +104,11 @@ public:
 		return valid && !constant.IsNull() && compare_value(value, constant);
 	}
 
+	void SetConstant(Value constant_p) {
+		D_ASSERT(constant_p.type() == constant.type());
+		constant = std::move(constant_p);
+	}
+
 	idx_t FilterSelection(SelectionVector &sel, Vector &vector, idx_t scan_count,
 	                      idx_t &approved_tuple_count) override {
 		(void)scan_count;
@@ -287,6 +292,56 @@ private:
 	SelectionVector result_sel;
 	idx_t current_capacity = 0;
 	compare_value_t compare_value;
+};
+
+class DynamicFilterExecutor final : public ExpressionFilterExecutor {
+public:
+	DynamicFilterExecutor(shared_ptr<DynamicFilterData> filter_data_p, LogicalType column_type_p)
+	    : filter_data(std::move(filter_data_p)), column_type(std::move(column_type_p)) {
+	}
+
+	idx_t FilterSelection(SelectionVector &sel, Vector &vector, idx_t scan_count,
+	                      idx_t &approved_tuple_count) override {
+		Refresh();
+		if (!comparison) {
+			return approved_tuple_count;
+		}
+		return comparison->FilterSelection(sel, vector, scan_count, approved_tuple_count);
+	}
+
+	bool FiltersValues() const override {
+		return true;
+	}
+
+	bool FilterValue(const_data_ptr_t value, bool valid) override {
+		Refresh();
+		return !comparison || comparison->FilterValue(value, valid);
+	}
+
+private:
+	void Refresh() {
+		if (filter_data->version.load(std::memory_order_acquire) == version) {
+			return;
+		}
+		Value constant;
+		{
+			lock_guard<mutex> guard(filter_data->lock);
+			constant = filter_data->constant;
+			version = filter_data->version.load(std::memory_order_relaxed);
+		}
+		if (version == 0 || constant.type() != column_type) {
+			comparison.reset();
+		} else if (comparison) {
+			comparison->SetConstant(std::move(constant));
+		} else {
+			comparison = make_uniq<ComparisonFilterExecutor>(filter_data->comparison_type, std::move(constant));
+		}
+	}
+
+	shared_ptr<DynamicFilterData> filter_data;
+	LogicalType column_type;
+	idx_t version = 0;
+	unique_ptr<ComparisonFilterExecutor> comparison;
 };
 
 class SelectivityOptionalFilterExecutor final : public ExpressionFilterExecutor {
@@ -658,6 +713,17 @@ static unique_ptr<ExpressionFilterExecutor> TryCreateFunctionExecutor(const Boun
 	const auto &func_name = func.Function().GetName();
 	if (func_name == OptionalFilterScalarFun::NAME) {
 		return make_uniq<OptionalFilterExecutor>();
+	}
+	if (func_name == DynamicFilterScalarFun::NAME) {
+		if (!func.BindInfo()) {
+			return nullptr;
+		}
+		auto &filter_data = func.BindInfo()->Cast<DynamicFilterFunctionData>().filter_data;
+		const auto &column_type = func.GetChildren()[0]->GetReturnType();
+		if (!filter_data || !IsSupportedComparisonType(column_type.InternalType())) {
+			return nullptr;
+		}
+		return make_uniq<DynamicFilterExecutor>(filter_data, column_type);
 	}
 	if (func_name == SelectivityOptionalFilterScalarFun::NAME) {
 		auto optional_child = ExpressionFilter::GetOptionalFilterChild(func);

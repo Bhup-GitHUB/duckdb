@@ -207,3 +207,21 @@ query II
 SELECT count(*), bool_and(c = 1) FROM (SELECT k, count(*) AS c FROM d WHERE k IS NOT NULL GROUP BY k LIMIT 10)
 ----
 10	true
+
+statement ok
+CREATE TABLE skewed AS SELECT CASE WHEN i % 10 = 0 THEN i ELSE 0 END AS k FROM range(1000000) r(i)
+
+query II
+EXPLAIN SELECT k, count(*) FROM skewed GROUP BY k LIMIT 10
+----
+physical_plan	<REGEX>:.*Dynamic Filter \(k ?>= ?\?\).*
+
+query II
+SELECT count(*), bool_and(c = (SELECT count(*) FROM skewed s WHERE s.k = r.k)) FROM (SELECT k, count(*) AS c FROM skewed GROUP BY k LIMIT 10) r
+----
+10	true
+
+query II
+EXPLAIN SELECT k, count(*) FROM d GROUP BY k LIMIT 10
+----
+physical_plan	<REGEX>:.*Dynamic Filter \(k ?<= ?\?\).*

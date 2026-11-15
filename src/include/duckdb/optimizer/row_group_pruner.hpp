@@ -30,6 +30,7 @@ public:
 	bool TryOptimize(LogicalOperator &op) const;
 	static bool OrderScan(ClientContext &context, LogicalOperator &child, const BoundColumnRefExpression &key,
 	                      OrderType order_type, OrderByNullType null_order);
+	static OrderType GroupLimitEnd(ClientContext &context, LogicalOperator &child, const BoundColumnRefExpression &key);
 
 private:
 	ClientContext &context;

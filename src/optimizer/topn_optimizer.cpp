@@ -140,9 +140,11 @@ void TopN::PushdownGroupLimitFilter(LogicalLimit &limit) {
 	auto &group_limit = aggregate->group_limit;
 	group_limit.limit = total;
 	const auto key = GroupReference(*aggregate, 0);
-	group_limit.filter = PushdownDynamicFilter(*aggregate, key, BoundComparison(OrderType::ASCENDING), false);
+	const auto end = RowGroupPruner::GroupLimitEnd(context, *aggregate, key);
+	group_limit.order = {OrderModifiers(end, OrderByNullType::NULLS_LAST)};
+	group_limit.filter = PushdownDynamicFilter(*aggregate, key, BoundComparison(end), false);
 	if (group_limit.filter) {
-		RowGroupPruner::OrderScan(context, *aggregate, key, OrderType::ASCENDING, OrderByNullType::NULLS_LAST);
+		RowGroupPruner::OrderScan(context, *aggregate, key, end, OrderByNullType::NULLS_LAST);
 	}
 }
 

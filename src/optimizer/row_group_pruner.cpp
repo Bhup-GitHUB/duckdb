@@ -220,6 +220,55 @@ bool RowGroupPruner::OrderScan(ClientContext &context, LogicalOperator &child, c
 	return true;
 }
 
+OrderType RowGroupPruner::GroupLimitEnd(ClientContext &context, LogicalOperator &child,
+                                        const BoundColumnRefExpression &key) {
+	const auto &type = key.GetReturnType();
+	if (!type.IsNumeric() && !type.IsTemporal() && type != LogicalType::VARCHAR) {
+		return OrderType::ASCENDING;
+	}
+	ColumnIndex column_index;
+	auto logical_get = FindLogicalGet(child, key, column_index);
+	StorageIndex storage_index;
+	if (!logical_get || !logical_get->function.get_partition_stats ||
+	    !logical_get->TryGetStorageIndex(column_index, storage_index)) {
+		return OrderType::ASCENDING;
+	}
+	GetPartitionStatsInput input(logical_get->function, logical_get->bind_data.get());
+	input.row_groups = true;
+	struct End {
+		RowGroupOrderKey key;
+		idx_t reached = 0;
+
+		void Note(const RowGroupOrderKey &candidate) {
+			if (RowGroupOrderKeys::IsNull(candidate, OrderByNullType::NULLS_LAST)) {
+				return;
+			}
+			if (reached == 0 || candidate < key) {
+				key = candidate;
+				reached = 1;
+			} else if (candidate == key) {
+				reached++;
+			}
+		}
+	};
+	End min;
+	End max;
+	for (auto &partition : logical_get->function.get_partition_stats(context, input)) {
+		if (!partition.partition_row_group) {
+			continue;
+		}
+		auto stats = partition.partition_row_group->GetColumnStatistics(storage_index);
+		if (!stats) {
+			continue;
+		}
+		min.Note(
+		    RowGroupOrderKeys::Get(*stats, OrderByStatistics::MIN, OrderType::ASCENDING, OrderByNullType::NULLS_LAST));
+		max.Note(
+		    RowGroupOrderKeys::Get(*stats, OrderByStatistics::MAX, OrderType::DESCENDING, OrderByNullType::NULLS_LAST));
+	}
+	return max.reached < min.reached ? OrderType::DESCENDING : OrderType::ASCENDING;
+}
+
 unique_ptr<RowGroupOrderOptions>
 RowGroupPruner::CreateRowGroupReordererOptions(const optional_idx row_limit, const optional_idx row_offset,
                                                const BoundOrderByNode &primary_order, const LogicalGet &logical_get,

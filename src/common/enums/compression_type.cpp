@@ -143,6 +143,8 @@ string CompressionTypeToString(CompressionType type) {
 		return "DICT_FSST12";
 	case CompressionType::COMPRESSION_COL_FSST12:
 		return "FSST12";
+	case CompressionType::COMPRESSION_COL_NUMERIC:
+		return "Numeric";
 	default:
 		throw InternalException("Unrecognized compression type!");
 	}

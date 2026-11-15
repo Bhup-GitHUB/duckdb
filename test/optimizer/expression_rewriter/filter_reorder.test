@@ -391,3 +391,35 @@ query I
 SELECT count(*) FILTER (event = 'REORDER') > 0 FROM duckdb_logs_parsed('AdaptiveFilter')
 ----
 true
+
+statement ok
+CREATE TABLE lists AS SELECT i, ['c' || (i % 50), 'x' || i] AS l FROM range(1, 1001) r(i)
+
+foreach level safe fast always
+
+statement ok
+SET filter_reorder = '{level}'
+
+query II
+EXPLAIN SELECT i FROM lists WHERE (len(list_filter(l, lambda x: x || x || x = 'zzz')) = 0 OR i IS NULL) AND (len(list_filter(l, lambda x: x = 'x7')) > 0 OR i IS NULL)
+----
+logical_opt	<REGEX>:.*x7.*zzz.*
+
+query I
+SELECT i FROM lists WHERE (len(list_filter(l, lambda x: x || x || x = 'zzz')) = 0 OR i IS NULL) AND (len(list_filter(l, lambda x: x = 'x7')) > 0 OR i IS NULL)
+----
+7
+
+endloop
+
+foreach level never safe
+
+statement ok
+SET filter_reorder = '{level}'
+
+query II
+EXPLAIN SELECT i FROM lists WHERE (len(list_filter(l, lambda x: x::INTEGER > 0)) = 0 OR i IS NULL) AND (len(list_filter(l, lambda x: x = 'x7')) > 0 OR i IS NULL)
+----
+logical_opt	<REGEX>:.*INTEGER.*x7.*
+
+endloop

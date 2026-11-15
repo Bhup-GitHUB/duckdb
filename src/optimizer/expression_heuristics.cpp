@@ -1,5 +1,6 @@
 #include "duckdb/optimizer/expression_heuristics.hpp"
 #include "duckdb/common/enums/filter_reorder.hpp"
+#include "duckdb/function/lambda_functions.hpp"
 #include "duckdb/main/settings.hpp"
 #include "duckdb/planner/table_filter_set.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
@@ -219,6 +220,11 @@ idx_t ExpressionHeuristics::ExpressionCost(const BoundFunctionExpression &expr) 
 	idx_t cost_children = 0;
 	for (auto &child : expr.GetChildren()) {
 		cost_children += Cost(*child);
+	}
+	if (expr.Function().HasBindLambdaCallback() && expr.BindInfo()) {
+		if (auto lambda = expr.BindInfo()->Cast<LambdaFunctionData>().GetLambdaExpression()) {
+			cost_children += Cost(*lambda);
+		}
 	}
 
 	auto cost_function = function_costs.find(expr.Function().GetName().GetIdentifierName());

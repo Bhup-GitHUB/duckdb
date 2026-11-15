@@ -632,6 +632,9 @@ unique_ptr<FunctionData> LambdaFunctions::ListLambdaBind(ClientContext &context,
 	if (lambda_bind_data->is_volatile) {
 		bound_function.SetVolatile();
 	}
+	if (!bound_lambda_expr.LambdaExpr()->CanThrow()) {
+		bound_function.SetErrorMode(FunctionErrors::CANNOT_ERROR);
+	}
 	return std::move(lambda_bind_data);
 }
 

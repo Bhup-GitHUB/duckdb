@@ -930,6 +930,29 @@ static void DistinctExecuteGenericLoop(const T *__restrict ldata, const T *__res
 	}
 }
 
+template <class T, class OP, bool LEFT_FLAT, bool LEFT_NULLS>
+static void DistinctExecuteConstantRightLoop(const T *__restrict ldata, const T &rvalue, int8_t *__restrict result_data,
+                                             const SelectionVector &lsel, idx_t count, const ValidityMask &lmask) {
+	for (idx_t i = 0; i < count; i++) {
+		const auto lindex = LEFT_FLAT ? i : lsel.get_index(i);
+		result_data[i] =
+		    OP::template Operation<T>(ldata[lindex], rvalue, LEFT_NULLS && !lmask.RowIsValid(lindex), false);
+	}
+}
+
+template <class T, class OP, bool LEFT_FLAT>
+static void DistinctExecuteConstantRight(const UnifiedVectorFormat &ldata, const T &rvalue, int8_t *result_data,
+                                         idx_t count) {
+	const auto lvalues = UnifiedVectorFormat::GetData<T>(ldata);
+	if (ldata.validity.CanHaveNull()) {
+		DistinctExecuteConstantRightLoop<T, OP, LEFT_FLAT, true>(lvalues, rvalue, result_data, *ldata.sel, count,
+		                                                         ldata.validity);
+	} else {
+		DistinctExecuteConstantRightLoop<T, OP, LEFT_FLAT, false>(lvalues, rvalue, result_data, *ldata.sel, count,
+		                                                          ldata.validity);
+	}
+}
+
 template <class T, class OP>
 static void DistinctExecuteConstant(const Vector &left, const Vector &right, Vector &result) {
 	result.SetVectorType(VectorType::CONSTANT_VECTOR);
@@ -950,9 +973,17 @@ static void DistinctExecute(const Vector &left, const Vector &right, Vector &res
 		right.ToUnifiedFormat(rdata);
 		result.SetVectorType(VectorType::FLAT_VECTOR);
 		auto result_data = FlatVector::GetDataMutable<int8_t>(result);
-		DistinctExecuteGenericLoop<T, OP>(UnifiedVectorFormat::GetData<T>(ldata),
-		                                  UnifiedVectorFormat::GetData<T>(rdata), result_data, ldata.sel, rdata.sel,
-		                                  count, ldata.validity, rdata.validity);
+		const auto rvalues = UnifiedVectorFormat::GetData<T>(rdata);
+		if (right.GetVectorType() == VectorType::CONSTANT_VECTOR && !ConstantVector::IsNull(right)) {
+			if (ldata.sel->IsSet()) {
+				DistinctExecuteConstantRight<T, OP, false>(ldata, rvalues[0], result_data, count);
+			} else {
+				DistinctExecuteConstantRight<T, OP, true>(ldata, rvalues[0], result_data, count);
+			}
+		} else {
+			DistinctExecuteGenericLoop<T, OP>(UnifiedVectorFormat::GetData<T>(ldata), rvalues, result_data, ldata.sel,
+			                                  rdata.sel, count, ldata.validity, rdata.validity);
+		}
 	}
 }
 

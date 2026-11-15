@@ -2116,8 +2116,8 @@ struct DuckDBPartitionRowGroup : public PartitionRowGroup {
 	shared_ptr<RowGroup> row_group;
 	const bool is_exact;
 
-	unique_ptr<BaseStatistics> GetColumnStatistics(const StorageIndex &storage_index) override {
-		return row_group->GetStatistics(storage_index);
+	optionally_owned_ptr<const BaseStatistics> GetColumnStatistics(const StorageIndex &storage_index) override {
+		return unique_ptr<const BaseStatistics>(row_group->GetStatistics(storage_index));
 	}
 
 	bool MinMaxIsExact(const StorageIndex &) override {

@@ -74,7 +74,7 @@ struct RowGroupSegmentNodeEntry {
 
 struct RowGroupOffsetEntry {
 	idx_t count;
-	unique_ptr<BaseStatistics> stats;
+	optionally_owned_ptr<const BaseStatistics> stats;
 };
 
 using RowGroupMap = multimap<RowGroupOrderKey, RowGroupSegmentNodeEntry>;

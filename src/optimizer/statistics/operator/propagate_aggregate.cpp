@@ -40,7 +40,7 @@ struct MinMaxColumnInfo {
 struct ValueComparator {
 	virtual ~ValueComparator() = default;
 	virtual bool Compare(Value &lhs, Value &rhs) const = 0;
-	virtual Value GetVal(BaseStatistics &stats) const = 0;
+	virtual Value GetVal(const BaseStatistics &stats) const = 0;
 };
 
 template <typename StatsType>
@@ -48,7 +48,7 @@ struct MinValueComp : public ValueComparator {
 	bool Compare(Value &lhs, Value &rhs) const override {
 		return lhs < rhs;
 	}
-	Value GetVal(BaseStatistics &stats) const override {
+	Value GetVal(const BaseStatistics &stats) const override {
 		return StatsType::Min(stats);
 	}
 };
@@ -58,7 +58,7 @@ struct MaxValueComp : public ValueComparator {
 	bool Compare(Value &lhs, Value &rhs) const override {
 		return lhs > rhs;
 	}
-	Value GetVal(BaseStatistics &stats) const override {
+	Value GetVal(const BaseStatistics &stats) const override {
 		return StatsType::Max(stats);
 	}
 };

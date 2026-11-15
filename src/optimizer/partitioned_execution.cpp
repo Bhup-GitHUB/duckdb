@@ -156,7 +156,7 @@ static optional_ptr<LogicalGet> PartitionedExecutionTraceColumns(LogicalOperator
 	return get;
 }
 
-static bool PartitionedExecutionCanUseStats(const unique_ptr<BaseStatistics> &stats) {
+static bool PartitionedExecutionCanUseStats(optional_ptr<const BaseStatistics> stats) {
 	if (!stats || stats->CanHaveNull()) {
 		return false; // No stats or contains NULL
 	}
@@ -201,7 +201,7 @@ static void PartitionedExecutionHandleGlobalStats(Optimizer &optimizer, LogicalO
 		} else {
 			stats = get.function.statistics(optimizer.context, get.bind_data.get(), it->column_index.GetPrimaryIndex());
 		}
-		if (!PartitionedExecutionCanUseStats(stats)) {
+		if (!PartitionedExecutionCanUseStats(stats.get())) {
 			it = PartitionedExecutionHandleColumnRemoval(op.type, columns, it);
 		} else if (PartitionedExecutionMinMaxEqual(*stats)) {
 			it = columns.erase(it); // This column will never matter
@@ -265,7 +265,7 @@ PartitionedExecutionCollectStatsNodes(LogicalOperator &op, vector<PartitionedExe
 				break;
 			}
 			const auto stats = ps.partition_row_group->GetColumnStatistics(it->storage_index);
-			if (PartitionedExecutionCanUseStats(stats)) {
+			if (PartitionedExecutionCanUseStats(stats.get())) {
 				PartitionedExecutionAddStatsNodes(*stats, ps.count, stats_nodes);
 			} else {
 				success = false; // Unable to use these stats

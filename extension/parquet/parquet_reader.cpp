@@ -1940,10 +1940,10 @@ struct ParquetPartitionRowGroup : public PartitionRowGroup {
 	const optional_ptr<ParquetOptions> parquet_options;
 	const idx_t row_group_idx;
 
-	unique_ptr<BaseStatistics> GetColumnStatistics(const StorageIndex &storage_index) override {
+	optionally_owned_ptr<const BaseStatistics> GetColumnStatistics(const StorageIndex &storage_index) override {
 		const idx_t primary_index = storage_index.GetPrimaryIndex();
 		if (primary_index >= root_schema->children.size()) {
-			return nullptr;
+			return {};
 		}
 		D_ASSERT(metadata.row_groups.size() > row_group_idx);
 
@@ -1951,9 +1951,9 @@ struct ParquetPartitionRowGroup : public PartitionRowGroup {
 		const auto &column_schema = root_schema->children[primary_index];
 		auto column_stats = column_schema.Stats(metadata, *parquet_options, row_group_idx, row_group.columns);
 		if (!column_stats || !storage_index.IsPushdownExtract() || !column_stats->GetType().IsNested()) {
-			return column_stats;
+			return unique_ptr<const BaseStatistics>(std::move(column_stats));
 		}
-		return column_stats->PushdownExtract(storage_index.GetChildIndex(0));
+		return unique_ptr<const BaseStatistics>(column_stats->PushdownExtract(storage_index.GetChildIndex(0)));
 	}
 
 	bool MinMaxIsExact(const StorageIndex &storage_index) override {

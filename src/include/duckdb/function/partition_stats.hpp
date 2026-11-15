@@ -11,6 +11,7 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/common/optional_idx.hpp"
+#include "duckdb/common/optionally_owned_ptr.hpp"
 #include "duckdb/common/column_index.hpp"
 #include "duckdb/storage/storage_index.hpp"
 
@@ -28,7 +29,7 @@ enum class CountType { COUNT_EXACT, COUNT_APPROXIMATE };
 
 struct PartitionRowGroup {
 	virtual ~PartitionRowGroup() = default;
-	virtual unique_ptr<BaseStatistics> GetColumnStatistics(const StorageIndex &storage_index) = 0;
+	virtual optionally_owned_ptr<const BaseStatistics> GetColumnStatistics(const StorageIndex &storage_index) = 0;
 	virtual bool MinMaxIsExact(const StorageIndex &storage_index) = 0;
 	//! Whether this row group has data that has not been durably checkpointed/flushed yet.
 	virtual bool HasPendingWrites() = 0;

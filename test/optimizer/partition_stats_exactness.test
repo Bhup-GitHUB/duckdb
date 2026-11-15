@@ -142,3 +142,39 @@ query I
 SELECT id FROM rg_order ORDER BY id LIMIT 1 OFFSET 1_000
 ----
 1000120
+
+# A row group whose column is all NULL adds nothing to min/max, so the other row groups' statistics still answer them.
+statement ok
+CREATE TABLE null_rg (v BIGINT);
+
+statement ok
+INSERT INTO null_rg SELECT NULL FROM range(0, 122_880);
+
+statement ok
+INSERT INTO null_rg SELECT i FROM range(0, 122_880) t(i);
+
+query II
+EXPLAIN SELECT min(v), max(v) FROM null_rg
+----
+physical_plan	<!REGEX>:.*Sequential Scan.*
+
+query II
+SELECT min(v), max(v) FROM null_rg
+----
+0	122879
+
+statement ok
+CREATE TABLE all_null (v BIGINT);
+
+statement ok
+INSERT INTO all_null SELECT NULL FROM range(0, 122_880);
+
+query II
+EXPLAIN SELECT min(v), max(v) FROM all_null
+----
+physical_plan	<!REGEX>:.*Sequential Scan.*
+
+query II
+SELECT min(v), max(v) FROM all_null
+----
+NULL	NULL

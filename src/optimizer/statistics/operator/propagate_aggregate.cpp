@@ -118,44 +118,48 @@ bool TryGetMinMaxColumnInfo(const Expression &expr, MinMaxColumnInfo &info) {
 	return true;
 }
 
-bool TryGetValueFromStats(const PartitionStatistics &stats, const StorageIndex &storage_index,
-                          const ValueComparator &comparator, const LogicalType &result_type, Value &result) {
+enum class StatsValue : uint8_t { UNKNOWN, ALL_NULL, FOUND };
+
+StatsValue TryGetValueFromStats(const PartitionStatistics &stats, const StorageIndex &storage_index,
+                                const ValueComparator &comparator, const LogicalType &result_type, Value &result) {
 	if (!stats.partition_row_group) {
-		return false;
+		return StatsValue::UNKNOWN;
 	}
 	auto column_stats = stats.partition_row_group->GetColumnStatistics(storage_index);
 	if (!column_stats) {
-		return false;
+		return StatsValue::UNKNOWN;
 	}
 	if (!stats.partition_row_group->MinMaxIsExact(storage_index) || stats.partition_row_group->HasPendingWrites()) {
-		return false;
+		return StatsValue::UNKNOWN;
+	}
+	if (!column_stats->CanHaveNoNull()) {
+		return StatsValue::ALL_NULL;
 	}
 	if (column_stats->GetStatsType() == StatisticsType::NUMERIC_STATS) {
 		if (!NumericStats::HasMinMax(*column_stats)) {
-			// TODO: This also returns if an entire row group is null. In that case, we could skip/compare null
-			return false;
+			return StatsValue::UNKNOWN;
 		}
 	} else {
 		D_ASSERT(column_stats->GetStatsType() == StatisticsType::STRING_STATS);
 		if (!StringStats::HasMinMax(*column_stats)) {
-			return false;
+			return StatsValue::UNKNOWN;
 		}
 		if (StringStats::GetMinType(*column_stats) != StringStatsType::EXACT_STATS ||
 		    StringStats::GetMaxType(*column_stats) != StringStatsType::EXACT_STATS) {
 			// string stats are not exact - we cannot use the value from the stats
-			return false;
+			return StatsValue::UNKNOWN;
 		}
 	}
 	result = comparator.GetVal(*column_stats);
 	if (result.type() == result_type) {
-		return true;
+		return StatsValue::FOUND;
 	}
 	auto cast = result.DefaultTryCastAs(result_type);
 	if (!cast) {
-		return false;
+		return StatsValue::UNKNOWN;
 	}
 	result = std::move(*cast);
-	return true;
+	return StatsValue::FOUND;
 }
 
 bool GroupingSetCanIntroduceNull(const LogicalAggregate &aggr, idx_t group_idx) {
@@ -356,18 +360,19 @@ void StatisticsPropagator::TryExecuteAggregates(LogicalAggregate &aggr, unique_p
 			const auto &result_type = min_max_columns[agg_idx].result_type;
 			auto &comparator = comparators[agg_idx];
 
-			Value agg_result;
-			if (!TryGetValueFromStats(partition_stats[0], storage_index, *comparator, result_type, agg_result)) {
-				return;
-			}
-			for (idx_t partition_idx = 1; partition_idx < partition_stats.size(); partition_idx++) {
+			Value agg_result(result_type);
+			for (auto &partition : partition_stats) {
 				Value rhs;
-				if (!TryGetValueFromStats(partition_stats[partition_idx], storage_index, *comparator, result_type,
-				                          rhs)) {
+				switch (TryGetValueFromStats(partition, storage_index, *comparator, result_type, rhs)) {
+				case StatsValue::UNKNOWN:
 					return;
-				}
-				if (!comparator->Compare(agg_result, rhs)) {
-					agg_result = rhs;
+				case StatsValue::ALL_NULL:
+					break;
+				case StatsValue::FOUND:
+					if (agg_result.IsNull() || !comparator->Compare(agg_result, rhs)) {
+						agg_result = std::move(rhs);
+					}
+					break;
 				}
 			}
 			types.push_back(agg_result.type());

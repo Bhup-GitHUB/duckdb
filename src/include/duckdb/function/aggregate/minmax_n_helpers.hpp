@@ -434,6 +434,93 @@ struct MinMaxFixedValueOrNull {
 	}
 };
 
+struct MinMaxWidenedValue {
+	using TYPE = int64_t;
+	using EXTRA_STATE = Vector;
+
+	static bool CanWiden(PhysicalType type) {
+		switch (type) {
+		case PhysicalType::BOOL:
+		case PhysicalType::INT8:
+		case PhysicalType::INT16:
+		case PhysicalType::UINT8:
+		case PhysicalType::UINT16:
+		case PhysicalType::UINT32:
+		case PhysicalType::UINT64:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	static TYPE Create(const UnifiedVectorFormat &format, const idx_t idx) {
+		return UnifiedVectorFormat::GetData<int64_t>(format)[idx];
+	}
+
+	static EXTRA_STATE CreateExtraState() {
+		return Vector(LogicalType::BIGINT);
+	}
+
+	static void PrepareData(const Vector &input, EXTRA_STATE &extra_state, UnifiedVectorFormat &format,
+	                        const bool nulls_last) {
+		switch (input.GetType().InternalType()) {
+		case PhysicalType::BOOL:
+			Widen<bool>(input, extra_state);
+			break;
+		case PhysicalType::INT8:
+			Widen<int8_t>(input, extra_state);
+			break;
+		case PhysicalType::INT16:
+			Widen<int16_t>(input, extra_state);
+			break;
+		case PhysicalType::UINT8:
+			Widen<uint8_t>(input, extra_state);
+			break;
+		case PhysicalType::UINT16:
+			Widen<uint16_t>(input, extra_state);
+			break;
+		case PhysicalType::UINT32:
+			Widen<uint32_t>(input, extra_state);
+			break;
+		case PhysicalType::UINT64:
+			Widen<uint64_t>(input, extra_state);
+			break;
+		default:
+			throw InternalException("MinMaxWidenedValue: unsupported type %s", input.GetType().ToString());
+		}
+		extra_state.ToUnifiedFormat(format);
+	}
+
+private:
+	template <class T>
+	static void Widen(const Vector &input, Vector &result) {
+		auto writer = FlatVector::Writer<int64_t>(result, input.size());
+		for (auto entry : input.Values<T>()) {
+			if (!entry.IsValid()) {
+				writer.WriteNull();
+			} else if (std::is_same_v<T, uint64_t>) {
+				writer.WriteValue(static_cast<int64_t>(static_cast<uint64_t>(entry.GetValue()) ^ (uint64_t(1) << 63)));
+			} else {
+				writer.WriteValue(static_cast<int64_t>(entry.GetValue()));
+			}
+		}
+	}
+};
+
+template <bool NULLS_LAST>
+struct MinMaxWidenedValueOrNull : MinMaxFixedValueOrNull<int64_t, NULLS_LAST> {
+	using EXTRA_STATE = MinMaxWidenedValue::EXTRA_STATE;
+
+	static EXTRA_STATE CreateExtraState() {
+		return MinMaxWidenedValue::CreateExtraState();
+	}
+
+	static void PrepareData(const Vector &input, EXTRA_STATE &extra_state, UnifiedVectorFormat &format,
+	                        const bool nulls_last) {
+		MinMaxWidenedValue::PrepareData(input, extra_state, format, nulls_last);
+	}
+};
+
 //------------------------------------------------------------------------------
 // MinMaxN Operation (common for both ArgMinMaxN and MinMaxN)
 //------------------------------------------------------------------------------

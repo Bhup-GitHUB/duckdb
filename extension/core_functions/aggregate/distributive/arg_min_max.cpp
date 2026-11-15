@@ -782,7 +782,11 @@ void SpecializeArgMinMaxNFunction(PhysicalType arg_type, BoundAggregateFunction 
 		break;
 #endif
 	default:
-		SpecializeArgMinMaxNFunction<VAL_TYPE, MinMaxFallbackValue, COMPARATOR>(function);
+		if (MinMaxWidenedValue::CanWiden(arg_type)) {
+			SpecializeArgMinMaxNFunction<VAL_TYPE, MinMaxWidenedValue, COMPARATOR>(function);
+		} else {
+			SpecializeArgMinMaxNFunction<VAL_TYPE, MinMaxFallbackValue, COMPARATOR>(function);
+		}
 		break;
 	}
 }
@@ -847,7 +851,11 @@ void SpecializeArgMinMaxNullNFunction(PhysicalType arg_type, BoundAggregateFunct
 		break;
 #endif
 	default:
-		SpecializeArgMinMaxNullNFunction<VAL_TYPE, MinMaxFallbackValue, COMPARATOR>(function);
+		if (MinMaxWidenedValue::CanWiden(arg_type)) {
+			SpecializeArgMinMaxNullNFunction<VAL_TYPE, MinMaxWidenedValueOrNull<NULLS_LAST>, COMPARATOR>(function);
+		} else {
+			SpecializeArgMinMaxNullNFunction<VAL_TYPE, MinMaxFallbackValue, COMPARATOR>(function);
+		}
 		break;
 	}
 }

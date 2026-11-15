@@ -542,11 +542,38 @@ void SpecializeMinMaxNFunction(PhysicalType arg_type, BoundAggregateFunction &fu
 	case PhysicalType::VARCHAR:
 		SpecializeMinMaxNFunction<MinMaxStringValue, COMPARATOR>(function);
 		break;
+	case PhysicalType::BOOL:
+		SpecializeMinMaxNFunction<MinMaxFixedValue<bool>, COMPARATOR>(function);
+		break;
+	case PhysicalType::INT8:
+		SpecializeMinMaxNFunction<MinMaxFixedValue<int8_t>, COMPARATOR>(function);
+		break;
+	case PhysicalType::INT16:
+		SpecializeMinMaxNFunction<MinMaxFixedValue<int16_t>, COMPARATOR>(function);
+		break;
 	case PhysicalType::INT32:
 		SpecializeMinMaxNFunction<MinMaxFixedValue<int32_t>, COMPARATOR>(function);
 		break;
 	case PhysicalType::INT64:
 		SpecializeMinMaxNFunction<MinMaxFixedValue<int64_t>, COMPARATOR>(function);
+		break;
+	case PhysicalType::INT128:
+		SpecializeMinMaxNFunction<MinMaxFixedValue<hugeint_t>, COMPARATOR>(function);
+		break;
+	case PhysicalType::UINT8:
+		SpecializeMinMaxNFunction<MinMaxFixedValue<uint8_t>, COMPARATOR>(function);
+		break;
+	case PhysicalType::UINT16:
+		SpecializeMinMaxNFunction<MinMaxFixedValue<uint16_t>, COMPARATOR>(function);
+		break;
+	case PhysicalType::UINT32:
+		SpecializeMinMaxNFunction<MinMaxFixedValue<uint32_t>, COMPARATOR>(function);
+		break;
+	case PhysicalType::UINT64:
+		SpecializeMinMaxNFunction<MinMaxFixedValue<uint64_t>, COMPARATOR>(function);
+		break;
+	case PhysicalType::UINT128:
+		SpecializeMinMaxNFunction<MinMaxFixedValue<uhugeint_t>, COMPARATOR>(function);
 		break;
 	case PhysicalType::FLOAT:
 		SpecializeMinMaxNFunction<MinMaxFixedValue<float>, COMPARATOR>(function);

@@ -27,6 +27,9 @@ public:
 	DUCKDB_API static idx_t OctetLength(bitstring_t bits);
 	//! Extracts the nth bit from bit string; the first (leftmost) bit is indexed 0
 	DUCKDB_API static idx_t GetBit(bitstring_t bit_string, idx_t n);
+	static data_t SortKeyByte(bitstring_t bit_string, idx_t n) {
+		return GetBit(bit_string, n) ? 3 : 2;
+	}
 	//! Sets the nth bit in bit string to newvalue; the first (leftmost) bit is indexed 0
 	DUCKDB_API static void SetBit(bitstring_t &bit_string, idx_t n, idx_t new_value);
 	//! Returns first starting index of the specified substring within bits, or zero if it's not present.

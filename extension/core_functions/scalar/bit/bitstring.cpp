@@ -55,16 +55,12 @@ ScalarFunctionSet BitStringFun::GetFunctions() {
 
 namespace {
 
-// Keep the key bytes above the BLOB escape range while preserving 0 < 1.
-constexpr data_t BIT_SORT_KEY_ZERO = 2;
-constexpr data_t BIT_SORT_KEY_ONE = 3;
-
 string_t CreateBitStringSortKey(string_t input, Vector &result) {
 	const auto bit_length = Bit::BitLength(input);
 	auto target = StringVector::EmptyString(result, bit_length);
 	auto data = data_ptr_cast(target.GetDataWriteable());
 	for (idx_t bit_idx = 0; bit_idx < bit_length; bit_idx++) {
-		data[bit_idx] = Bit::GetBit(input, bit_idx) ? BIT_SORT_KEY_ONE : BIT_SORT_KEY_ZERO;
+		data[bit_idx] = Bit::SortKeyByte(input, bit_idx);
 	}
 	target.Finalize();
 	return target;

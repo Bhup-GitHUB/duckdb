@@ -38,12 +38,6 @@ constexpr data_t STRING_DELIMITER = 0;
 constexpr data_t LIST_DELIMITER = 0;
 constexpr data_t BLOB_ESCAPE_CHARACTER = 1;
 
-//! BIT/BITSTRING sort-key bytes (mirrors CreateBitStringSortKey in the core_functions bitstring code):
-//! each bit is expanded to one byte, kept above the STRING_DELIMITER (0) so a shorter bitstring (a
-//! prefix) sorts first, while preserving 0 < 1
-constexpr data_t BIT_SORT_KEY_ZERO = 2;
-constexpr data_t BIT_SORT_KEY_ONE = 3;
-
 data_t GetVariantTypeRank(const VariantLogicalType type_id) {
 	return static_cast<data_t>(GetVariantComparisonType(type_id));
 }
@@ -178,7 +172,7 @@ void EncodeVariantValue(const VariantNode &it, SINK &sink) {
 		auto bitstring = it.GetString();
 		auto bit_length = Bit::BitLength(bitstring);
 		for (idx_t bit_idx = 0; bit_idx < bit_length; bit_idx++) {
-			sink.Write(Bit::GetBit(bitstring, bit_idx) ? BIT_SORT_KEY_ONE : BIT_SORT_KEY_ZERO);
+			sink.Write(Bit::SortKeyByte(bitstring, bit_idx));
 		}
 		sink.Write(STRING_DELIMITER);
 		break;

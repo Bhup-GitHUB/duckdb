@@ -931,14 +931,19 @@ BoundStatement Binder::Bind(CopyStatement &stmt, CopyToType copy_to_type) {
 
 	if (!entry) {
 		IsFormatExtensionKnown(context, stmt.info->format);
-		// If we did not find an entry, we default to a CSV
-		entry = catalog
-		            .LookupEntry(entry_retriever,
-		                         EntryLookupInfo(
-		                             CatalogType::COPY_FUNCTION_ENTRY,
-		                             QualifiedName(catalog.GetName(), *catalog.GetDefaultSchema(), Identifier("csv"))),
-		                         OnEntryNotFound::THROW_EXCEPTION)
-		            .entry;
+		auto lookup_format = [&](const char *name, OnEntryNotFound if_not_found) {
+			return catalog
+			    .LookupEntry(
+			        entry_retriever,
+			        EntryLookupInfo(CatalogType::COPY_FUNCTION_ENTRY,
+			                        QualifiedName(catalog.GetName(), *catalog.GetDefaultSchema(), Identifier(name))),
+			        if_not_found)
+			    .entry;
+		};
+		entry = lookup_format("text", OnEntryNotFound::RETURN_NULL);
+		if (!entry) {
+			entry = lookup_format("csv", OnEntryNotFound::THROW_EXCEPTION);
+		}
 	}
 	auto &copy_function = entry->Cast<CopyFunctionCatalogEntry>();
 	auto &function = copy_function.function;

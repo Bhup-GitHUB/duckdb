@@ -30,6 +30,7 @@ public:
 	void ReorderExpressions(vector<unique_ptr<Expression>> &expressions);
 	//! Return the cost of an expression
 	static idx_t Cost(const Expression &expr);
+	static idx_t Cost(const TableFilter &filter);
 
 	static vector<idx_t> GetInitialOrder(const TableFilterSet &table_filters);
 
@@ -43,7 +44,6 @@ private:
 	static idx_t ExpressionCost(const BoundFunctionExpression &expr);
 	static idx_t ExpressionCost(const BoundOperatorExpression &expr, ExpressionType expr_type);
 	static idx_t ExpressionCost(PhysicalType return_type, idx_t multiplier);
-	static idx_t Cost(const TableFilter &filter);
 
 	static idx_t ComparisonExpressionCost(const BoundFunctionExpression &expr);
 	static idx_t BetweenExpressionCost(const BoundFunctionExpression &expr);

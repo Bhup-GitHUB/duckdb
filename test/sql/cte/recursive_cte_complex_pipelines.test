@@ -2,6 +2,8 @@
 # description: Recursive CTEs with complex pipelines
 # group: [cte]
 
+test-env TEST_MAX_EXECUTION_TIME 5000
+
 # recursive CTE with various cross products
 query I
 WITH RECURSIVE t AS
@@ -158,7 +160,7 @@ LIMIT 1;
 
 # A post-LEFT filter in an EXISTS controls convergence of the recursion.
 statement ok
-SET max_execution_time=5000
+SET max_execution_time={TEST_MAX_EXECUTION_TIME}
 
 query II
 WITH RECURSIVE t(step, r, v) AS (

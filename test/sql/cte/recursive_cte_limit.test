@@ -2,11 +2,13 @@
 # description: LIMIT can stop recursive CTE input before caching operators fill a vector
 # group: [cte]
 
+test-env TEST_MAX_EXECUTION_TIME 5000
+
 statement ok
 SET threads=1
 
 statement ok
-SET max_execution_time=5000
+SET max_execution_time={TEST_MAX_EXECUTION_TIME}
 
 # A selective filter must yield its small chunks to LIMIT instead of accumulating a full vector.
 query I

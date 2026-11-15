@@ -60,6 +60,7 @@ public:
 	unique_ptr<Expression> partition_path_expression;
 
 	vector<Identifier> names;
+	vector<Identifier> query_names;
 	vector<LogicalType> expected_types;
 
 public:

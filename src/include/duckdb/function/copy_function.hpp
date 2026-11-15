@@ -95,6 +95,7 @@ struct CopyFunctionBindInput {
 	const CopyInfo &info;
 	shared_ptr<CopyFunctionInfo> function_info;
 	string file_extension;
+	vector<Identifier> query_names;
 };
 
 struct CopyFromFunctionBindInput {

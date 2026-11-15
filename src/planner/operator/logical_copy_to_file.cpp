@@ -78,6 +78,7 @@ void LogicalCopyToFile::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault(225, "table_index", table_index, TableIndex(0));
 	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(226, "partition_path_expression",
 	                                                            partition_path_expression);
+	serializer.WritePropertyWithDefault(16611, "query_names", query_names);
 }
 
 unique_ptr<LogicalOperator> LogicalCopyToFile::Deserialize(Deserializer &deserializer) {
@@ -134,6 +135,7 @@ unique_ptr<LogicalOperator> LogicalCopyToFile::Deserialize(Deserializer &deseria
 	unique_ptr<Expression> partition_path_expression;
 	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(226, "partition_path_expression",
 	                                                             partition_path_expression);
+	auto query_names = deserializer.ReadPropertyWithDefault<vector<Identifier>>(16611, "query_names");
 
 	if (!has_serialize) {
 		// If not serialized, re-bind with the copy info
@@ -144,6 +146,8 @@ unique_ptr<LogicalOperator> LogicalCopyToFile::Deserialize(Deserializer &deseria
 		CopyFunctionBindInput function_bind_input(*copy_info, function.function_info);
 		auto names_to_write = GetNamesWithoutPartitions(names, partition_columns, write_partition_columns);
 		auto types_to_write = GetTypesWithoutPartitions(expected_types, partition_columns, write_partition_columns);
+		function_bind_input.query_names =
+		    GetNamesWithoutPartitions(query_names, partition_columns, write_partition_columns);
 		bind_data = function.copy_to_bind(context, function_bind_input, names_to_write, types_to_write);
 	}
 
@@ -157,6 +161,7 @@ unique_ptr<LogicalOperator> LogicalCopyToFile::Deserialize(Deserializer &deseria
 	result->partition_output = partition_output;
 	result->partition_columns = partition_columns;
 	result->names = names;
+	result->query_names = std::move(query_names);
 	result->expected_types = expected_types;
 	result->rotate = rotate;
 	result->return_type = return_type;

@@ -568,6 +568,8 @@ BoundStatement Binder::BindCopyTo(CopyStatement &stmt, const CopyFunction &funct
 	    unique_column_names, resolved_options.partition_cols, resolved_options.write_partition_columns);
 	auto types_to_write = LogicalCopyToFile::GetTypesWithoutPartitions(
 	    select_node.types, resolved_options.partition_cols, resolved_options.write_partition_columns);
+	bind_input.query_names = LogicalCopyToFile::GetNamesWithoutPartitions(
+	    select_node.names, resolved_options.partition_cols, resolved_options.write_partition_columns);
 	auto function_data = function.copy_to_bind(context, bind_input, names_to_write, types_to_write);
 
 	unique_ptr<Expression> partition_path_expression;
@@ -605,6 +607,7 @@ BoundStatement Binder::BindCopyTo(CopyStatement &stmt, const CopyFunction &funct
 	copy->partition_path_expression = std::move(partition_path_expression);
 
 	copy->names = unique_column_names;
+	copy->query_names = select_node.names;
 	copy->expected_types = select_node.types;
 
 	copy->AddChild(std::move(select_node.plan));

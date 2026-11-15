@@ -307,6 +307,8 @@ public:
 	                                 const IdentifierEquality &equals);
 	static Identifier FreeSequenceName(CatalogTransaction transaction, SchemaCatalogEntry &schema,
 	                                   const Identifier &table, const Identifier &column);
+	//! Returns the correlated-column scope name for a given event type ("new" for INSERT, "old" for DELETE).
+	static string RowScopeName(TriggerEventType event_type);
 
 	//! The client context
 	ClientContext &context;
@@ -650,8 +652,6 @@ private:
 	//! The caller must keep it alive until the matching pop_back().
 	unique_ptr<ExpressionBinder> SetupRowScope(TableIndex table_index, const vector<Identifier> &col_names,
 	                                           const vector<LogicalType> &col_types, const string &scope_name);
-	//! Returns the correlated-column scope name for a given event type ("new" for INSERT, "old" for DELETE).
-	static string RowScopeName(TriggerEventType event_type);
 	BoundStatement BindNode(UpdateQueryNode &node);
 	BoundStatement BindNode(DeleteQueryNode &node);
 	vector<idx_t> BindTruncateGroup(DeleteQueryNode &node, TableCatalogEntry &table);

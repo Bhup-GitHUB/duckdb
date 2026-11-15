@@ -234,7 +234,8 @@ RowGroupPruner::CreateRowGroupReordererOptions(const optional_idx row_limit, con
 	optional_idx combined_limit =
 	    row_limit.IsValid() && row_offset.IsValid() ? row_limit.GetIndex() + row_offset.GetIndex() : optional_idx();
 
-	if (row_offset.IsValid() && row_offset.GetIndex() > 0 && logical_get.function.get_partition_stats) {
+	if (row_offset.IsValid() && row_offset.GetIndex() > 0 && !logical_get.table_filters.HasFilters() &&
+	    logical_get.function.get_partition_stats) {
 		// Try to prune with offset
 		GetPartitionStatsInput input(logical_get.function, logical_get.bind_data.get());
 		auto partition_stats = logical_get.function.get_partition_stats(context, input);

@@ -15,6 +15,10 @@ void Constraint::Print() const {
 	Printer::Print(ToString());
 }
 
+bool Constraint::Equals(const Constraint &other) const {
+	return type == other.type;
+}
+
 bool Constraint::NeedsBackingIndex() const {
 	switch (type) {
 	case ConstraintType::UNIQUE:

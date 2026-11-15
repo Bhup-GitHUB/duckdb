@@ -45,6 +45,14 @@ unique_ptr<Constraint> UniqueConstraint::Copy() const {
 	return make_uniq<UniqueConstraint>(*this);
 }
 
+bool UniqueConstraint::Equals(const Constraint &other) const {
+	if (!Constraint::Equals(other)) {
+		return false;
+	}
+	auto &unique = other.Cast<UniqueConstraint>();
+	return columns == unique.columns && is_primary_key == unique.is_primary_key && check_mode == unique.check_mode;
+}
+
 bool UniqueConstraint::IsPrimaryKey() const {
 	return is_primary_key;
 }

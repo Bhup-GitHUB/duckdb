@@ -17,4 +17,8 @@ unique_ptr<Constraint> CheckConstraint::Copy() const {
 	return copy;
 }
 
+bool CheckConstraint::Equals(const Constraint &other) const {
+	return Constraint::Equals(other) && ParsedExpression::Equals(expression, other.Cast<CheckConstraint>().expression);
+}
+
 } // namespace duckdb

@@ -73,6 +73,7 @@ public:
 	DUCKDB_API void Print() const;
 
 	DUCKDB_API virtual unique_ptr<Constraint> Copy() const = 0;
+	DUCKDB_API virtual bool Equals(const Constraint &other) const;
 
 	DUCKDB_API virtual void Serialize(Serializer &serializer) const;
 	DUCKDB_API static unique_ptr<Constraint> Deserialize(Deserializer &deserializer);

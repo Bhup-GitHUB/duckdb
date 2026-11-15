@@ -53,4 +53,24 @@ unique_ptr<Constraint> ForeignKeyConstraint::Copy() const {
 	return make_uniq<ForeignKeyConstraint>(*this);
 }
 
+bool ForeignKeyConstraint::Equals(const Constraint &other) const {
+	if (!Constraint::Equals(other)) {
+		return false;
+	}
+	auto &foreign_key = other.Cast<ForeignKeyConstraint>();
+	if (info.IsAppendConstraint() != foreign_key.info.IsAppendConstraint()) {
+		return false;
+	}
+	if (!info.IsAppendConstraint()) {
+		return true;
+	}
+	const auto default_schema = [](const Identifier &schema) {
+		return schema.empty() || schema == DEFAULT_SCHEMA;
+	};
+	const bool same_schema =
+	    default_schema(info.schema) ? default_schema(foreign_key.info.schema) : info.schema == foreign_key.info.schema;
+	return same_schema && info.table == foreign_key.info.table && fk_columns == foreign_key.fk_columns &&
+	       pk_columns == foreign_key.pk_columns;
+}
+
 } // namespace duckdb

@@ -143,7 +143,6 @@ SELECT id FROM rg_order ORDER BY id LIMIT 1 OFFSET 1_000
 ----
 1000120
 
-# A row group whose column is all NULL adds nothing to min/max, so the other row groups' statistics still answer them.
 statement ok
 CREATE TABLE null_rg (v BIGINT);
 

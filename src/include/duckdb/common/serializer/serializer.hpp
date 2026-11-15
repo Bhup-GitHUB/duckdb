@@ -208,6 +208,17 @@ public:
 		self.OnPropertyEnd();
 	}
 
+	template <class FUNC>
+	void WriteOptionalObject(this auto &self, const field_id_t field_id, const char *tag, bool present, FUNC f) {
+		self.OnOptionalPropertyBegin(field_id, tag, present);
+		if (present) {
+			self.OnObjectBegin();
+			f(self);
+			self.OnObjectEnd();
+		}
+		self.OnOptionalPropertyEnd(present);
+	}
+
 	template <class SELF, class FUNC>
 	void WriteList(this SELF &self, const field_id_t field_id, const char *tag, idx_t count, FUNC func) {
 		self.OnPropertyBegin(field_id, tag);
@@ -218,6 +229,21 @@ public:
 		}
 		self.OnListEnd();
 		self.OnPropertyEnd();
+	}
+
+	template <class SELF, class FUNC>
+	void WriteOptionalList(this SELF &self, const field_id_t field_id, const char *tag, idx_t count, FUNC func) {
+		const bool present = count != 0;
+		self.OnOptionalPropertyBegin(field_id, tag, present);
+		if (present) {
+			self.OnListBegin(count);
+			TypedList<SELF> list {self};
+			for (idx_t i = 0; i < count; i++) {
+				func(list, i);
+			}
+			self.OnListEnd();
+		}
+		self.OnOptionalPropertyEnd(present);
 	}
 
 protected:

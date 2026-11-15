@@ -4,6 +4,7 @@
 
 #define CATCH_CONFIG_RUNNER
 #include "catch.hpp"
+#include <absl/base/config.h>
 #include <stdlib.h>
 #include <cerrno>
 #include <cstring>
@@ -843,7 +844,7 @@ static bool TryReadExactSQLLogicTestFilter(const vector<string> &input_files, ve
 	return !test_paths.empty();
 }
 
-int main(int argc_in, char *argv[]) {
+static int RunUnittest(int argc_in, char *argv[]) {
 	string thread_stack_error;
 	if (!ConfigureThreadStackSize(argc_in, argv, thread_stack_error)) {
 		fprintf(stderr, "%s\n", thread_stack_error.c_str());
@@ -1071,4 +1072,23 @@ int main(int argc_in, char *argv[]) {
 	temp_dir_reclaimer.success = result == 0;
 
 	return result;
+}
+
+int main(int argc_in, char *argv[]) {
+#if defined(DUCKDB_UNITTEST_HAS_DEFAULT_PTHREAD_ATTRIBUTES) &&                                                         \
+    (defined(ABSL_HAVE_ADDRESS_SANITIZER) || defined(ABSL_HAVE_MEMORY_SANITIZER) ||                                    \
+     defined(ABSL_HAVE_THREAD_SANITIZER) || !defined(__OPTIMIZE__))
+	pthread_attr_t attributes;
+	pthread_attr_init(&attributes);
+	pthread_attr_setstacksize(&attributes, size_t {64} << 20);
+	pthread_setattr_default_np(&attributes);
+	pthread_attr_destroy(&attributes);
+#ifndef ABSL_HAVE_THREAD_SANITIZER
+	int result = 0;
+	std::thread runner([&] { result = RunUnittest(argc_in, argv); });
+	runner.join();
+	return result;
+#endif
+#endif
+	return RunUnittest(argc_in, argv);
 }

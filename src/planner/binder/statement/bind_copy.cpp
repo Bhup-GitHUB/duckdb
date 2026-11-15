@@ -856,7 +856,7 @@ void Binder::BindCopyOptions(CopyInfo &info) {
 		if (option_name == "reject_limit") {
 			if (!inputs.empty()) {
 				auto limit = inputs[0].GetValue<int64_t>();
-				if (limit < 0) {
+				if (limit <= 0) {
 					throw ParserException("REJECT_LIMIT (%lld) must be greater than zero", limit);
 				}
 			}

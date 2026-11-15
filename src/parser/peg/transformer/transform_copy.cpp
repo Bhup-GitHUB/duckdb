@@ -60,7 +60,7 @@ void SetCopyOptions(unique_ptr<CopyInfo> &info, vector<GenericCopyOption> &optio
 				// but the value form (REJECT_LIMIT 1, ON_ERROR IGNORE, ...) lands
 				// directly in info->options and bypasses that path.
 				if (option.name == "reject_limit") {
-					if (!option.children.empty() && option.children[0].GetValue<int64_t>() < 0) {
+					if (!option.children.empty() && option.children[0].GetValue<int64_t>() <= 0) {
 						throw ParserException("REJECT_LIMIT (%lld) must be greater than zero",
 						                      option.children[0].GetValue<int64_t>());
 					}

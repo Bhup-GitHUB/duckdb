@@ -289,6 +289,21 @@ static bool ReadsPointsOnly(const LogicalOperator &plan, const vector<StatementP
 	});
 }
 
+static bool PrunesByLayout(const LogicalOperator &op) {
+	if (op.type == LogicalOperatorType::LOGICAL_GET) {
+		auto &options = op.Cast<LogicalGet>().row_group_order_options;
+		if (options && (options->row_group_offset != 0 || options->leading_null_group_offset != 0)) {
+			return true;
+		}
+	}
+	for (auto &child : op.children) {
+		if (PrunesByLayout(*child)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 template <class VISIT>
 static void VisitPreparedStatements(LogicalOperator &plan, VISIT &&visit) {
 	for (optional_ptr<LogicalOperator> op = &plan; op; op = op->children.empty() ? nullptr : op->children[0].get()) {
@@ -717,8 +732,21 @@ unique_ptr<LogicalOperator> Optimizer::Optimize(unique_ptr<LogicalOperator> plan
 			prepared.properties.always_require_rebind = true;
 		});
 	}
-	VisitPreparedStatements(*plan, [](const LogicalOperator &planned, PreparedStatementData &prepared) {
-		prepared.properties.point_reads_only = ReadsPointsOnly(planned, prepared.properties.data_reads);
+	VisitPreparedStatements(*plan, [&](const LogicalOperator &planned, PreparedStatementData &prepared) {
+		auto &properties = prepared.properties;
+		properties.point_reads_only = ReadsPointsOnly(planned, properties.data_reads);
+		if (!PrunesByLayout(planned)) {
+			return;
+		}
+		properties.layout_dependent = true;
+		for (auto &read : properties.data_reads) {
+			const auto layout = read.entry->GetLayoutVersion(context);
+			if (!layout.IsValid()) {
+				properties.always_require_rebind = true;
+				return;
+			}
+			read.layout_version = layout.GetIndex();
+		}
 	});
 
 	Planner::VerifyPlan(context, plan);

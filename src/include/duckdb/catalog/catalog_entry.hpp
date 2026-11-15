@@ -83,6 +83,7 @@ public:
 	virtual void OnDrop();
 
 	virtual optional_idx GetDataVersion(ClientContext &context) const;
+	virtual optional_idx GetLayoutVersion(ClientContext &context) const;
 
 	virtual unique_ptr<CatalogEntry> Copy(ClientContext &context) const;
 

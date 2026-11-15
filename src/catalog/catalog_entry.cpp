@@ -191,6 +191,10 @@ optional_idx CatalogEntry::GetDataVersion(ClientContext &context) const {
 	return optional_idx();
 }
 
+optional_idx CatalogEntry::GetLayoutVersion(ClientContext &context) const {
+	return optional_idx();
+}
+
 InCatalogEntry::InCatalogEntry(CatalogType type, Catalog &catalog, Identifier name, idx_t oid)
     : CatalogEntry(type, catalog, std::move(name), oid), catalog(catalog) {
 }

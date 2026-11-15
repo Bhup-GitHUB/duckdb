@@ -115,6 +115,7 @@ struct StatementProperties {
 		const CatalogEntry *entry = nullptr;
 		idx_t version = 0;
 		TableIndex table_index;
+		idx_t layout_version = 0;
 	};
 
 	//! The set of databases this statement will read from
@@ -125,6 +126,7 @@ struct StatementProperties {
 	vector<const CatalogEntry *> resolved_entries;
 	vector<DataRead> data_reads;
 	bool point_reads_only = false;
+	bool layout_dependent = false;
 	//! Whether or not the statement requires a valid transaction. Almost all statements require this, with the
 	//! exception of ROLLBACK
 	bool requires_valid_transaction;

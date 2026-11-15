@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/enums/tuple_data_layout_enums.hpp"
+#include "duckdb/planner/group_limit.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/planner/column_binding.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
@@ -44,6 +45,7 @@ public:
 	vector<unique_ptr<BaseStatistics>> group_stats;
 	//! Whether the inputs to all expression are non-NULL
 	TupleDataValidityType distinct_validity;
+	GroupLimit group_limit;
 
 public:
 	InsertionOrderPreservingMap<string> ParamsToString() const override;

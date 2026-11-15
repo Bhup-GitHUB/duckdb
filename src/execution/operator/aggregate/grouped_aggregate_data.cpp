@@ -10,6 +10,21 @@ const vector<vector<ProjectionIndex>> &GroupedAggregateData::GetGroupingFunction
 	return grouping_functions;
 }
 
+bool GroupedAggregateData::CanLimitGroups(const vector<unique_ptr<Expression>> &groups,
+                                          const vector<unique_ptr<Expression>> &aggregates,
+                                          const vector<GroupingSet> &grouping_sets, bool has_grouping_functions) {
+	if (groups.empty() || aggregates.empty() || grouping_sets.size() != 1 || has_grouping_functions) {
+		return false;
+	}
+	for (auto &aggregate : aggregates) {
+		auto &bound = aggregate->Cast<BoundAggregateExpression>();
+		if (bound.IsDistinct() || bound.GetOrderBys()) {
+			return false;
+		}
+	}
+	return true;
+}
+
 void GroupedAggregateData::InitializeGroupby(vector<unique_ptr<Expression>> groups,
                                              vector<unique_ptr<Expression>> expressions,
                                              vector<unsafe_vector<ProjectionIndex>> grouping_functions) {

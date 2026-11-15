@@ -12,6 +12,7 @@
 #include "duckdb/function/aggregate_function.hpp"
 #include "duckdb/parser/group_by_node.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/group_limit.hpp"
 
 namespace duckdb {
 
@@ -35,12 +36,16 @@ public:
 	//! Pointers to the aggregates
 	vector<BoundAggregateExpression *> bindings;
 	idx_t filter_count;
-	optional_idx group_limit;
+	GroupLimit group_limit;
 
 public:
 	idx_t GroupCount() const;
 
 	const vector<vector<ProjectionIndex>> &GetGroupingFunctions() const;
+
+	static bool CanLimitGroups(const vector<unique_ptr<Expression>> &groups,
+	                           const vector<unique_ptr<Expression>> &aggregates,
+	                           const vector<GroupingSet> &grouping_sets, bool has_grouping_functions);
 
 	void InitializeGroupby(vector<unique_ptr<Expression>> groups, vector<unique_ptr<Expression>> expressions,
 	                       vector<unsafe_vector<ProjectionIndex>> grouping_functions);

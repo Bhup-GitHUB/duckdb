@@ -9,7 +9,11 @@
 #pragma once
 
 #include "duckdb/common/constants.hpp"
+#include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/optional_ptr.hpp"
+#include "duckdb/planner/expression.hpp"
+#include "duckdb/planner/filter/table_filter_functions.hpp"
+#include "duckdb/planner/operator/logical_limit.hpp"
 
 namespace duckdb {
 class ClientContext;
@@ -28,6 +32,10 @@ public:
 
 private:
 	void PushdownDynamicFilters(LogicalTopN &op);
+	void PushdownGroupLimitFilter(LogicalLimit &limit);
+	bool PushdownGroupOrderBound(LogicalTopN &op);
+	shared_ptr<DynamicFilterData> PushdownDynamicFilter(LogicalOperator &child, const Expression &expr,
+	                                                    ExpressionType comparison_type, bool nulls_first);
 
 private:
 	ClientContext &context;

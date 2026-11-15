@@ -103,16 +103,10 @@ static void TrySetGroupLimit(PhysicalOperator &plan, idx_t limit) {
 	}
 	auto &hash_aggregate = child->Cast<PhysicalHashAggregate>();
 	auto &data = hash_aggregate.grouped_aggregate_data;
-	if (data.groups.empty() || hash_aggregate.grouping_sets.size() != 1 || !data.GetGroupingFunctions().empty()) {
-		return;
+	if (GroupedAggregateData::CanLimitGroups(data.groups, data.aggregates, hash_aggregate.grouping_sets,
+	                                         !data.GetGroupingFunctions().empty())) {
+		data.group_limit.limit = limit;
 	}
-	for (auto &aggregate : data.aggregates) {
-		auto &bound = aggregate->Cast<BoundAggregateExpression>();
-		if (bound.IsDistinct() || bound.GetOrderBys()) {
-			return;
-		}
-	}
-	data.group_limit = limit;
 }
 
 static PhysicalOperator &CreateLimitedDistinct(PhysicalPlanGenerator &generator, PhysicalHashAggregate &hash_aggregate,

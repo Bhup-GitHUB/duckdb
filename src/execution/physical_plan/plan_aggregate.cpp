@@ -297,6 +297,7 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalAggregate &op) {
 	auto &group_by = Make<PhysicalHashAggregate>(context, op.types, std::move(op.expressions), std::move(op.groups),
 	                                             std::move(op.grouping_sets), std::move(op.grouping_functions),
 	                                             op.estimated_cardinality, group_validity, op.distinct_validity);
+	group_by.Cast<PhysicalHashAggregate>().grouped_aggregate_data.group_limit = std::move(op.group_limit);
 	group_by.children.push_back(plan);
 	return group_by;
 }

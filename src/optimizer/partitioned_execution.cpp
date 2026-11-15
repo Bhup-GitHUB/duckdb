@@ -565,6 +565,7 @@ void PartitionedExecution::Optimize(unique_ptr<LogicalOperator> &op) {
 	}
 
 	GetPartitionStatsInput input(get->function, get->bind_data.get());
+	input.row_groups = true;
 	const auto partition_stats = get->function.get_partition_stats(optimizer.context, input);
 	if (partition_stats.size() <= 1) {
 		return; // Can't split 0 or 1 partitions

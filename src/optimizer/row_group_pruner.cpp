@@ -238,6 +238,7 @@ RowGroupPruner::CreateRowGroupReordererOptions(const optional_idx row_limit, con
 	    logical_get.function.get_partition_stats) {
 		// Try to prune with offset
 		GetPartitionStatsInput input(logical_get.function, logical_get.bind_data.get());
+		input.row_groups = true;
 		auto partition_stats = logical_get.function.get_partition_stats(context, input);
 
 		if (!partition_stats.empty()) {

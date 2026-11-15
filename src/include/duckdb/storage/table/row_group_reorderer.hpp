@@ -44,6 +44,8 @@ public:
 	                                                 OrderByNullType null_order, const StorageIndex &column_idx,
 	                                                 idx_t row_offset, bool single_order_key,
 	                                                 vector<PartitionStatistics> &stats);
+	static vector<idx_t> GetOffsetPrunedPartitions(const RowGroupOrderOptions &options,
+	                                               const vector<PartitionStatistics> &stats);
 
 private:
 	const RowGroupOrderOptions options;

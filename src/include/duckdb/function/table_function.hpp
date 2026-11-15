@@ -305,6 +305,7 @@ struct GetPartitionStatsInput {
 
 	const BoundTableFunction &table_function;
 	optional_ptr<const FunctionData> bind_data;
+	bool row_groups = false;
 };
 
 struct TableFunctionGetMetricsInput {

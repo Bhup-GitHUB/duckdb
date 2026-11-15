@@ -92,6 +92,25 @@ bool IsNullStatKey(const RowGroupOrderKey &key) {
 	return RowGroupOrderKeys::IsNull(key, OrderByNullType::NULLS_LAST);
 }
 
+enum class RowGroupPlacement : uint8_t { NULL_ONLY, AMBIGUOUS, ORDERED };
+
+RowGroupPlacement PlaceRowGroup(optional_ptr<const BaseStatistics> stats, const RowGroupOrderOptions &options,
+                                RowGroupOrderKey &key) {
+	if (!stats) {
+		return RowGroupPlacement::AMBIGUOUS;
+	}
+	if (IsNullOnly(*stats)) {
+		return RowGroupPlacement::NULL_ONLY;
+	}
+	key = StatKey(*stats, options.order_by, options.order_type);
+	if (IsNullStatKey(key) || (options.null_order == OrderByNullType::NULLS_FIRST && stats->CanHaveNull())) {
+		// No trustworthy ordering statistics, or the row group might still contribute NULLs that must be scanned
+		// before definitely non-null groups with NULLS_FIRST.
+		return RowGroupPlacement::AMBIGUOUS;
+	}
+	return RowGroupPlacement::ORDERED;
+}
+
 OrderByStatistics Opposite(const OrderByStatistics order_by) {
 	return order_by == OrderByStatistics::MAX ? OrderByStatistics::MIN : OrderByStatistics::MAX;
 }
@@ -363,6 +382,39 @@ OffsetPruningResult RowGroupReorderer::GetOffsetAfterPruning(const OrderByStatis
 	return result;
 }
 
+vector<idx_t> RowGroupReorderer::GetOffsetPrunedPartitions(const RowGroupOrderOptions &options,
+                                                           const vector<PartitionStatistics> &stats) {
+	vector<idx_t> result;
+	vector<pair<RowGroupOrderKey, idx_t>> ordered;
+	for (idx_t i = 0; i < stats.size(); i++) {
+		auto &partition = stats[i];
+		if (!partition.partition_row_group) {
+			continue;
+		}
+		auto column_stats = partition.partition_row_group->GetColumnStatistics(options.column_idx);
+		RowGroupOrderKey key;
+		switch (PlaceRowGroup(column_stats.get(), options, key)) {
+		case RowGroupPlacement::NULL_ONLY:
+			if (options.null_order == OrderByNullType::NULLS_FIRST &&
+			    result.size() < options.leading_null_group_offset) {
+				result.push_back(i);
+			}
+			break;
+		case RowGroupPlacement::AMBIGUOUS:
+			break;
+		case RowGroupPlacement::ORDERED:
+			ordered.emplace_back(key, i);
+			break;
+		}
+	}
+	const auto pruned = MinValue<idx_t>(options.row_group_offset, ordered.size());
+	std::partial_sort(ordered.begin(), ordered.begin() + NumericCast<int64_t>(pruned), ordered.end());
+	for (idx_t i = 0; i < pruned; i++) {
+		result.push_back(ordered[i].second);
+	}
+	return result;
+}
+
 optional_ptr<SegmentNode<RowGroup>> RowGroupReorderer::GetRootSegment(RowGroupSegmentTree &row_groups) {
 	if (initialized) {
 		if (ordered_row_groups.empty()) {
@@ -378,24 +430,18 @@ optional_ptr<SegmentNode<RowGroup>> RowGroupReorderer::GetRootSegment(RowGroupSe
 	RowGroupMap row_group_map;
 	for (auto &row_group : row_groups.SegmentNodes()) {
 		auto stats = row_group.GetNode().GetStatistics(options.column_idx);
-		if (!stats) {
-			ambiguous_groups.push_back(row_group);
-			continue;
-		}
-		if (IsNullOnly(*stats)) {
+		RowGroupOrderKey comparison_value;
+		switch (PlaceRowGroup(stats.get(), options, comparison_value)) {
+		case RowGroupPlacement::NULL_ONLY:
 			null_only_groups.push_back(row_group);
-			continue;
-		}
-		auto comparison_value = StatKey(*stats, options.order_by, options.order_type);
-		if (IsNullStatKey(comparison_value) ||
-		    (options.null_order == OrderByNullType::NULLS_FIRST && stats->CanHaveNull())) {
-			// No trustworthy ordering statistics, or the row group might still contribute NULLs that must be scanned
-			// before definitely non-null groups with NULLS_FIRST.
+			break;
+		case RowGroupPlacement::AMBIGUOUS:
 			ambiguous_groups.push_back(row_group);
-			continue;
+			break;
+		case RowGroupPlacement::ORDERED:
+			row_group_map.emplace(comparison_value, RowGroupSegmentNodeEntry {row_group, std::move(stats)});
+			break;
 		}
-		auto entry = RowGroupSegmentNodeEntry {row_group, std::move(stats)};
-		row_group_map.emplace(comparison_value, std::move(entry));
 	}
 
 	if (options.null_order == OrderByNullType::NULLS_FIRST) {

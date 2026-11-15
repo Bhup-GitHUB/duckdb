@@ -73,7 +73,9 @@ bool RowGroupPruner::TryOptimize(LogicalOperator &op) const {
 	}
 
 	ColumnIndex column_index;
-	auto logical_get = FindLogicalGet(*logical_order, column_index);
+	auto logical_get =
+	    FindLogicalGet(*logical_order->children[0],
+	                   logical_order->orders[0].expression->Cast<BoundColumnRefExpression>(), column_index);
 	if (!logical_get) {
 		return false;
 	}
@@ -164,17 +166,13 @@ optional_ptr<LogicalOrder> RowGroupPruner::FindLogicalOrder(const LogicalLimit &
 	return logical_order;
 }
 
-optional_ptr<LogicalGet> RowGroupPruner::FindLogicalGet(const LogicalOrder &logical_order,
-                                                        ColumnIndex &column_index) const {
-	const auto &primary_order = logical_order.orders[0];
-	auto &colref = primary_order.expression->Cast<BoundColumnRefExpression>();
-
+optional_ptr<LogicalGet> RowGroupPruner::FindLogicalGet(LogicalOperator &child, const BoundColumnRefExpression &key,
+                                                        ColumnIndex &column_index) {
 	JoinFilterPushdownColumn column;
-	column.probe_column_index = colref.Binding();
+	column.probe_column_index = key.Binding();
 	vector<JoinFilterPushdownColumn> columns {std::move(column)};
 	vector<PushdownFilterTarget> pushdown_targets;
-	JoinFilterPushdownOptimizer::GetPushdownFilterTargets(*logical_order.children[0], std::move(columns),
-	                                                      pushdown_targets, true);
+	JoinFilterPushdownOptimizer::GetPushdownFilterTargets(child, std::move(columns), pushdown_targets, true);
 
 	if (pushdown_targets.empty()) {
 		return nullptr;
@@ -200,6 +198,26 @@ optional_ptr<LogicalGet> RowGroupPruner::FindLogicalGet(const LogicalOrder &logi
 	column_index = logical_get.GetColumnIndex(binding);
 
 	return logical_get;
+}
+
+bool RowGroupPruner::OrderScan(ClientContext &context, LogicalOperator &child, const BoundColumnRefExpression &key,
+                               OrderType order_type, OrderByNullType null_order) {
+	const auto &type = key.GetReturnType();
+	if (!type.IsNumeric() && !type.IsTemporal() && type != LogicalType::VARCHAR) {
+		return false;
+	}
+	ColumnIndex column_index;
+	auto logical_get = FindLogicalGet(child, key, column_index);
+	StorageIndex storage_index;
+	if (!logical_get || logical_get->row_group_order_options ||
+	    !logical_get->TryGetStorageIndex(column_index, storage_index)) {
+		return false;
+	}
+	const auto column_type = type == LogicalType::VARCHAR ? OrderByColumnType::STRING : OrderByColumnType::NUMERIC;
+	const auto order_by = order_type == OrderType::ASCENDING ? OrderByStatistics::MIN : OrderByStatistics::MAX;
+	logical_get->SetScanOrder(context, make_uniq<RowGroupOrderOptions>(storage_index, order_by, order_type, null_order,
+	                                                                   column_type, optional_idx(), 0, 0, false));
+	return true;
 }
 
 unique_ptr<RowGroupOrderOptions>

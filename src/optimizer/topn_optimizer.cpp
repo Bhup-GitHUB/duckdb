@@ -3,6 +3,7 @@
 #include "duckdb/common/limits.hpp"
 #include "duckdb/common/operator/add.hpp"
 #include "duckdb/execution/operator/aggregate/grouped_aggregate_data.hpp"
+#include "duckdb/optimizer/row_group_pruner.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_limit.hpp"
@@ -138,8 +139,11 @@ void TopN::PushdownGroupLimitFilter(LogicalLimit &limit) {
 	}
 	auto &group_limit = aggregate->group_limit;
 	group_limit.limit = total;
-	group_limit.filter =
-	    PushdownDynamicFilter(*aggregate, GroupReference(*aggregate, 0), BoundComparison(OrderType::ASCENDING), false);
+	const auto key = GroupReference(*aggregate, 0);
+	group_limit.filter = PushdownDynamicFilter(*aggregate, key, BoundComparison(OrderType::ASCENDING), false);
+	if (group_limit.filter) {
+		RowGroupPruner::OrderScan(context, *aggregate, key, OrderType::ASCENDING, OrderByNullType::NULLS_LAST);
+	}
 }
 
 bool TopN::PushdownGroupOrderBound(LogicalTopN &op) {

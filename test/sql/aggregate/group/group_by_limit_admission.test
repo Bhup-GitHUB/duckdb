@@ -194,3 +194,16 @@ query II
 SELECT count(*), bool_and(c = 10000) FROM (SELECT day, count(*) AS c FROM days GROUP BY day LIMIT 5)
 ----
 5	true
+
+statement ok
+SET threads = 1
+
+query II
+EXPLAIN ANALYZE SELECT k, count(*) FROM d GROUP BY k LIMIT 10
+----
+analyzed_plan	<REGEX>:.*Row Groups Scanned: 1 / 17.*
+
+query II
+SELECT count(*), bool_and(c = 1) FROM (SELECT k, count(*) AS c FROM d WHERE k IS NOT NULL GROUP BY k LIMIT 10)
+----
+10	true

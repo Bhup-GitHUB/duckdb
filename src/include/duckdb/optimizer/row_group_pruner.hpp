@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/function/table_function.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/operator/logical_order.hpp"
 #include "duckdb/storage/table/scan_state.hpp"
 
@@ -27,6 +28,8 @@ public:
 	unique_ptr<LogicalOperator> Optimize(unique_ptr<LogicalOperator> op);
 	//! Whether we can perform the optimization on this operator
 	bool TryOptimize(LogicalOperator &op) const;
+	static bool OrderScan(ClientContext &context, LogicalOperator &child, const BoundColumnRefExpression &key,
+	                      OrderType order_type, OrderByNullType null_order);
 
 private:
 	ClientContext &context;
@@ -34,7 +37,8 @@ private:
 private:
 	void GetLimitAndOffset(const LogicalLimit &logical_limit, optional_idx &row_limit, optional_idx &row_offset) const;
 	optional_ptr<LogicalOrder> FindLogicalOrder(const LogicalLimit &logical_limit) const;
-	optional_ptr<LogicalGet> FindLogicalGet(const LogicalOrder &logical_order, ColumnIndex &column_index) const;
+	static optional_ptr<LogicalGet> FindLogicalGet(LogicalOperator &child, const BoundColumnRefExpression &key,
+	                                               ColumnIndex &column_index);
 	// row_limit, row_offset, primary_order, logical_get, logical_limit
 	unique_ptr<RowGroupOrderOptions>
 	CreateRowGroupReordererOptions(optional_idx row_limit, optional_idx row_offset,

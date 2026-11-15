@@ -110,22 +110,6 @@ struct StatsWriter<void> : public BaseStatsWriter {
 	}
 };
 
-//! Lexicographic compare of two 12-byte string prefixes that are zero-padded past the string length, as the
-//! inline area of a string_t is. Returns <0, 0 or >0 like memcmp.
-static inline int CompareInlineBytes(const_data_ptr_t a, const_data_ptr_t b) {
-	const uint32_t a_prefix = Load<uint32_t>(a);
-	const uint32_t b_prefix = Load<uint32_t>(b);
-	if (a_prefix != b_prefix) {
-		return BSwapIfLE(a_prefix) < BSwapIfLE(b_prefix) ? -1 : 1;
-	}
-	const uint64_t a_rest = Load<uint64_t>(a + sizeof(uint32_t));
-	const uint64_t b_rest = Load<uint64_t>(b + sizeof(uint32_t));
-	if (a_rest != b_rest) {
-		return BSwapIfLE(a_rest) < BSwapIfLE(b_rest) ? -1 : 1;
-	}
-	return 0;
-}
-
 template <>
 struct StatsWriter<string_t> : public BaseStatsWriter {
 	friend struct StringStats;
@@ -190,12 +174,12 @@ struct StatsWriter<string_t> : public BaseStatsWriter {
 		if (is_set) {
 			// the prefix compare covers the first min(size, min_size) bytes exactly because the shorter side is
 			// zero-padded, and the length breaks a tie
-			auto min_cmp = CompareInlineBytes(data, min);
+			auto min_cmp = string_t::StringComparisonOperators::CompareInlineBytes(data, min);
 			if (min_cmp < 0 || (min_cmp == 0 && size < min_size)) {
 				memcpy(min, data, StringStatsData::CURRENT_MAX_STRING_MINMAX_SIZE);
 				min_size = size;
 			}
-			auto max_cmp = CompareInlineBytes(data, max);
+			auto max_cmp = string_t::StringComparisonOperators::CompareInlineBytes(data, max);
 			if (max_cmp > 0 || (max_cmp == 0 && size > max_size)) {
 				memcpy(max, data, StringStatsData::CURRENT_MAX_STRING_MINMAX_SIZE);
 				max_size = size;

@@ -298,11 +298,18 @@ OffsetPruningResult RowGroupReorderer::GetOffsetAfterPruning(const OrderByStatis
                                                              const OrderType order_type,
                                                              const OrderByNullType null_order,
                                                              const StorageIndex &storage_index, const idx_t row_offset,
+                                                             const bool single_order_key,
                                                              vector<PartitionStatistics> &stats) {
 	RowGroupOffsetMap ordered_row_groups;
 	idx_t new_row_offset = row_offset;
 	idx_t leading_null_group_offset = 0;
 	bool encountered_maybe_null_group = false;
+	const auto stop = [&]() -> OffsetPruningResult {
+		if (leading_null_group_offset > 0 && !single_order_key) {
+			return {row_offset, 0, 0};
+		}
+		return {new_row_offset, 0, leading_null_group_offset};
+	};
 
 	for (auto &partition_stats : stats) {
 		if (partition_stats.count_type == CountType::COUNT_APPROXIMATE || !partition_stats.partition_row_group) {
@@ -314,11 +321,11 @@ OffsetPruningResult RowGroupReorderer::GetOffsetAfterPruning(const OrderByStatis
 		}
 		auto column_stats = partition_stats.partition_row_group->GetColumnStatistics(storage_index);
 		if (!column_stats) {
-			return {new_row_offset, 0, leading_null_group_offset};
+			return stop();
 		}
 		if (null_order == OrderByNullType::NULLS_FIRST && IsNullOnly(*column_stats)) {
 			if (new_row_offset < partition_stats.count) {
-				return {new_row_offset, 0, leading_null_group_offset};
+				return stop();
 			}
 			new_row_offset -= partition_stats.count;
 			leading_null_group_offset++;
@@ -336,7 +343,7 @@ OffsetPruningResult RowGroupReorderer::GetOffsetAfterPruning(const OrderByStatis
 				encountered_maybe_null_group = true;
 				continue;
 			}
-			return {new_row_offset, 0, leading_null_group_offset};
+			return stop();
 		}
 		if (null_order == OrderByNullType::NULLS_FIRST && column_stats->CanHaveNull()) {
 			// Groups that might contain NULLs are scanned before definitely non-null groups with NULLS_FIRST.
@@ -348,7 +355,7 @@ OffsetPruningResult RowGroupReorderer::GetOffsetAfterPruning(const OrderByStatis
 		ordered_row_groups.emplace(comparison_value, std::move(entry));
 	}
 	if (null_order == OrderByNullType::NULLS_FIRST && encountered_maybe_null_group) {
-		return {new_row_offset, 0, leading_null_group_offset};
+		return stop();
 	}
 
 	auto result = FindOffsetPrunableChunks(ordered_row_groups, order_by, order_type, new_row_offset);

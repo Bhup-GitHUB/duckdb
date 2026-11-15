@@ -241,8 +241,9 @@ RowGroupPruner::CreateRowGroupReordererOptions(const optional_idx row_limit, con
 		auto partition_stats = logical_get.function.get_partition_stats(context, input);
 
 		if (!partition_stats.empty()) {
-			auto offset_puning_result = RowGroupReorderer::GetOffsetAfterPruning(
-			    order_by, order_type, null_order, storage_index, row_offset.GetIndex(), partition_stats);
+			auto offset_puning_result =
+			    RowGroupReorderer::GetOffsetAfterPruning(order_by, order_type, null_order, storage_index,
+			                                             row_offset.GetIndex(), single_order_key, partition_stats);
 			if (offset_puning_result.pruned_row_group_count > 0 || offset_puning_result.leading_null_group_offset > 0) {
 				// We can prune row groups and/or reduce the offset by consuming definite NULL-only groups
 				if (!logical_limit.unpruned_offset.IsValid()) {

@@ -1,0 +1,48 @@
+# name: test/sql/topn/test_top_n_nulls_first_multi_key_offset.test
+# description: OFFSET pruning skips all-NULL row groups of the first ORDER BY key only when no later key orders those NULLs
+# group: [topn]
+
+require no_alternative_verify
+
+statement ok
+SET threads TO 1
+
+statement ok
+ATTACH '{TEST_DIR}/top_n_nulls_first_multi_key_offset.duckdb' AS db (ROW_GROUP_SIZE 2048)
+
+statement ok
+CREATE TABLE db.t AS
+SELECT NULL::BIGINT AS k1, (2048 + i)::BIGINT AS k2 FROM range(2048) r(i)
+UNION ALL
+SELECT NULL::BIGINT, i::BIGINT FROM range(2048) r(i)
+UNION ALL
+SELECT (10000 + i)::BIGINT, i::BIGINT FROM range(2048) r(i)
+
+statement ok
+CHECKPOINT
+
+query II
+SELECT k1, k2 FROM db.t ORDER BY k1 NULLS FIRST, k2 LIMIT 3 OFFSET 2048
+----
+NULL	2048
+NULL	2049
+NULL	2050
+
+query II
+SELECT k1, k2 FROM db.t ORDER BY k1 NULLS FIRST, k2 LIMIT 3 OFFSET 4100
+----
+10004	4
+10005	5
+10006	6
+
+query I
+SELECT count(*) FROM (SELECT k1 FROM db.t ORDER BY k1 NULLS FIRST LIMIT 3 OFFSET 2050) WHERE k1 IS NULL
+----
+3
+
+query I
+SELECT k1 FROM db.t ORDER BY k1 NULLS FIRST LIMIT 3 OFFSET 4100
+----
+10004
+10005
+10006

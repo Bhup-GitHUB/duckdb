@@ -209,10 +209,11 @@ public:
 			return false;
 		}
 		// compare up to shared length. if still the same, compare lengths
-		static bool GreaterThan(const string_t &left, const string_t &right) {
+		static int8_t Compare(const string_t &left, const string_t &right) {
 			const uint32_t left_length = UnsafeNumericCast<uint32_t>(left.GetSize());
 			const uint32_t right_length = UnsafeNumericCast<uint32_t>(right.GetSize());
 			const uint32_t min_length = std::min<uint32_t>(left_length, right_length);
+			uint32_t compared = 0;
 
 #ifndef DUCKDB_DEBUG_NO_INLINE
 			uint32_t a_prefix = Load<uint32_t>(const_data_ptr_cast(left.GetPrefix()));
@@ -225,11 +226,22 @@ public:
 			//	if the prefix is equal, the extra bytes are guaranteed to be /0 for the shorter one
 
 			if (a_prefix != b_prefix) {
-				return BSwapIfLE(a_prefix) > BSwapIfLE(b_prefix);
+				return BSwapIfLE(a_prefix) > BSwapIfLE(b_prefix) ? 1 : -1;
 			}
+			compared = PREFIX_LENGTH;
 #endif
-			auto memcmp_res = memcmp(left.GetData(), right.GetData(), min_length);
-			return memcmp_res > 0 || (memcmp_res == 0 && left_length > right_length);
+			if (min_length > compared) {
+				const auto memcmp_res =
+				    memcmp(left.GetData() + compared, right.GetData() + compared, min_length - compared);
+				if (memcmp_res != 0) {
+					return memcmp_res > 0 ? 1 : -1;
+				}
+			}
+			return left_length == right_length ? 0 : left_length > right_length ? 1 : -1;
+		}
+
+		static bool GreaterThan(const string_t &left, const string_t &right) {
+			return Compare(left, right) > 0;
 		}
 	};
 

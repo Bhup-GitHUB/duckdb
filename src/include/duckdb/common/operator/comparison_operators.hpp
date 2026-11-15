@@ -83,6 +83,10 @@ template <>
 DUCKDB_API int8_t Comparator::Operation(const float &left, const float &right);
 template <>
 DUCKDB_API int8_t Comparator::Operation(const double &left, const double &right);
+template <>
+inline int8_t Comparator::Operation(const string_t &left, const string_t &right) {
+	return string_t::StringComparisonOperators::Compare(left, right);
+}
 
 template <>
 DUCKDB_API bool Equals::Operation(const float &left, const float &right);

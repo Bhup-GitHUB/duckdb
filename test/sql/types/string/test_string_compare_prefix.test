@@ -1,0 +1,79 @@
+# name: test/sql/types/string/test_string_compare_prefix.test
+# description: string ordering decided in the 4-byte prefix, past it, across the 12-byte inline boundary and by length
+# group: [string]
+
+statement ok
+CREATE TABLE s AS SELECT * FROM (VALUES
+	(0, ''),
+	(1, 'a'),
+	(2, 'ab'),
+	(3, 'abc'),
+	(4, 'abcd'),
+	(5, 'abcd' || chr(1)),
+	(6, 'abcde'),
+	(7, 'abcdefghijkl'),
+	(8, 'abcdefghijklm'),
+	(9, 'abcdefghijklmn'),
+	(10, 'abcdefghijkm'),
+	(11, 'abcdf'),
+	(12, 'abcdz'),
+	(13, 'abcdé'),
+	(14, 'abce'),
+	(15, 'b'),
+	(16, 'z'),
+	(17, 'é')
+) t(r, v)
+
+query I
+SELECT count(*) FROM s l, s r WHERE (l.v < r.v) <> (l.r < r.r) OR (l.v > r.v) <> (l.r > r.r) OR (l.v = r.v) <> (l.r = r.r) OR (l.v IS DISTINCT FROM r.v) <> (l.r <> r.r)
+----
+0
+
+statement ok
+CREATE TABLE b AS SELECT * FROM (VALUES
+	(0, '\x61\x62'::BLOB),
+	(1, '\x61\x62\x00'::BLOB),
+	(2, '\x61\x62\x00\x00'::BLOB),
+	(3, '\x61\x62\x00\x00\x00'::BLOB),
+	(4, '\x61\x62\x00\x00\x01'::BLOB),
+	(5, '\x61\x62\x00\x01'::BLOB),
+	(6, '\x61\x62\x01'::BLOB)
+) t(r, v)
+
+query I
+SELECT count(*) FROM b l, b r WHERE (l.v < r.v) <> (l.r < r.r) OR (l.v > r.v) <> (l.r > r.r) OR (l.v = r.v) <> (l.r = r.r)
+----
+0
+
+statement ok
+CREATE TABLE big AS SELECT r, v FROM s, range(1000) t(i)
+
+query II
+SELECT r, count(*) FROM (SELECT r, v FROM big ORDER BY v LIMIT 3500) GROUP BY r ORDER BY r
+----
+0	1000
+1	1000
+2	1000
+3	500
+
+query II
+SELECT r, count(*) FROM (SELECT r, v FROM big ORDER BY v DESC LIMIT 2500) GROUP BY r ORDER BY r
+----
+15	500
+16	1000
+17	1000
+
+query II
+SELECT r, count(*) FROM big GROUP BY r, v ORDER BY v DESC LIMIT 4
+----
+17	1000
+16	1000
+15	1000
+14	1000
+
+query II
+SELECT r, count(*) FROM big GROUP BY r, v ORDER BY v LIMIT 3 OFFSET 7
+----
+7	1000
+8	1000
+9	1000

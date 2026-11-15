@@ -164,6 +164,7 @@ CatalogSearchPath::CatalogSearchPath(ClientContext &context_p)
 void CatalogSearchPath::Reset() {
 	// Restore to the connection-level defaults.
 	SetPathsInternal(default_paths);
+	context.BumpBindingGeneration();
 }
 
 void CatalogSearchPath::SetDefaultPaths(vector<CatalogSearchEntry> new_defaults) {
@@ -177,10 +178,12 @@ void CatalogSearchPath::SetDefaultPaths(vector<CatalogSearchEntry> new_defaults)
 
 void CatalogSearchPath::RefreshSetPaths() {
 	SetPathsInternal(set_paths);
+	context.BumpBindingGeneration();
 }
 
 void CatalogSearchPath::RestoreSetPaths(vector<CatalogSearchEntry> paths) {
 	SetPathsInternal(std::move(paths));
+	context.BumpBindingGeneration();
 }
 
 string CatalogSearchPath::GetSetName(CatalogSetPathType set_type) {
@@ -263,6 +266,7 @@ void CatalogSearchPath::Set(vector<CatalogSearchEntry> new_paths, CatalogSetPath
 		}
 	}
 	SetPathsInternal(std::move(new_paths));
+	context.BumpBindingGeneration();
 }
 
 void CatalogSearchPath::Set(CatalogSearchEntry new_value, CatalogSetPathType set_type) {
@@ -512,7 +516,6 @@ static Identifier TemporarySchema(ClientContext &context) {
 
 void CatalogSearchPath::SetPathsInternal(vector<CatalogSearchEntry> new_paths) {
 	this->set_paths = std::move(new_paths);
-	generation++;
 
 	paths.clear();
 	paths.reserve(set_paths.size() + 4);

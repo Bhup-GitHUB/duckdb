@@ -57,6 +57,9 @@ void PhysicalReset::ResetExtensionVariable(ExecutionContext &context, DBConfig &
 	} else {
 		client_config.user_settings.ClearSetting(setting_index);
 	}
+	if (extension_option.rebind) {
+		PhysicalSet::Rebind(context.client, effective_scope);
+	}
 }
 
 void PhysicalReset::ResetOption(ExecutionContext &context, DBConfig &config, const ConfigurationOption &option,
@@ -87,6 +90,9 @@ void PhysicalReset::ResetOption(ExecutionContext &context, DBConfig &config, con
 			client_config.user_settings.ClearSetting(setting_index);
 		} else {
 			config.ResetGenericOption(setting_index);
+		}
+		if (option.rebind) {
+			PhysicalSet::Rebind(context.client, variable_scope);
 		}
 		return;
 	}
@@ -130,6 +136,9 @@ void PhysicalReset::ResetOption(ExecutionContext &context, DBConfig &config, con
 	}
 	default:
 		throw InternalException("Unsupported SetScope for variable");
+	}
+	if (option.rebind) {
+		PhysicalSet::Rebind(context.client, variable_scope);
 	}
 }
 

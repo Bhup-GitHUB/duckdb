@@ -1,15 +1,11 @@
 #include "duckdb/main/prepared_statement_data.hpp"
 #include "duckdb/parser/sql_statement.hpp"
 #include "duckdb/catalog/catalog.hpp"
-#include "duckdb/catalog/catalog_entry/trigger_catalog_entry.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/client_config.hpp"
-#include "duckdb/catalog/catalog_search_path.hpp"
-#include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/main/prepared_statement.hpp"
-#include "duckdb/main/settings.hpp"
 #include "duckdb/transaction/transaction.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
 
@@ -112,17 +108,7 @@ bool PreparedStatementData::RequireRebind(ClientContext &context,
 		// this statement must always be re-bound
 		return true;
 	}
-	if (properties.replication_role && *properties.replication_role != GetReplicationRole(context)) {
-		return true;
-	}
-	if (properties.acting_role.IsValid() && properties.acting_role.GetIndex() != context.ActingRole()) {
-		return true;
-	}
-	if (properties.search_path_generation.IsValid() &&
-	    properties.search_path_generation.GetIndex() != ClientData::Get(context).catalog_search_path->Generation()) {
-		return true;
-	}
-	if (properties.integer_overflow && *properties.integer_overflow != Settings::Get<IntegerOverflowSetting>(context)) {
+	if (properties.binding_generation != context.BindingGeneration()) {
 		return true;
 	}
 	if (!properties.bound_all_parameters) {

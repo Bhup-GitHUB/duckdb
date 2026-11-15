@@ -48,6 +48,7 @@ class Setting:
         is_debug: bool = False,
         is_deprecated: bool = False,
         no_reset_all: bool = False,
+        rebind: bool = False,
     ):
         self.name = self._get_valid_name(name)
         self.description = description
@@ -80,6 +81,7 @@ class Setting:
         self.is_debug = is_debug
         self.is_deprecated = is_deprecated
         self.no_reset_all = no_reset_all
+        self.rebind = rebind
         if self.default_scope is not None and self.scope is not None:
             raise ValueError("Only default_scope or scope can be specified")
 

@@ -33,32 +33,32 @@ DebugVerificationMode DBConfigOptions::global_verification_mode = DebugVerificat
 	{                                                                                                                  \
 		_PARAM::Name, _PARAM::Description, _PARAM::InputType, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,    \
 		    _PARAM::Scope, _PARAM::DefaultValue, nullptr, _PARAM::SettingIndex, _PARAM::IsDebug, _PARAM::IsDeprecated, \
-		    _PARAM::NoResetAll                                                                                         \
+		    _PARAM::NoResetAll, _PARAM::Rebind                                                                         \
 	}
 #define DUCKDB_SETTING_CALLBACK(_PARAM)                                                                                \
 	{                                                                                                                  \
 		_PARAM::Name, _PARAM::Description, _PARAM::InputType, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,    \
 		    _PARAM::Scope, _PARAM::DefaultValue, _PARAM::OnSet, _PARAM::SettingIndex, _PARAM::IsDebug,                 \
-		    _PARAM::IsDeprecated, _PARAM::NoResetAll                                                                   \
+		    _PARAM::IsDeprecated, _PARAM::NoResetAll, _PARAM::Rebind                                                   \
 	}
 #define DUCKDB_GLOBAL(_PARAM)                                                                                          \
 	{                                                                                                                  \
 		_PARAM::Name, _PARAM::Description, _PARAM::InputType, _PARAM::SetGlobal, nullptr, _PARAM::ResetGlobal,         \
 		    nullptr, _PARAM::GetSetting, nullptr, SettingScopeTarget::INVALID, nullptr, nullptr, optional_idx(),       \
-		    _PARAM::IsDebug, _PARAM::IsDeprecated, _PARAM::NoResetAll                                                  \
+		    _PARAM::IsDebug, _PARAM::IsDeprecated, _PARAM::NoResetAll, _PARAM::Rebind                                  \
 	}
 #define DUCKDB_LOCAL(_PARAM)                                                                                           \
 	{                                                                                                                  \
 		_PARAM::Name, _PARAM::Description, _PARAM::InputType, nullptr, _PARAM::SetLocal, nullptr, _PARAM::ResetLocal,  \
 		    _PARAM::GetSetting, nullptr, SettingScopeTarget::INVALID, nullptr, nullptr, optional_idx(),                \
-		    _PARAM::IsDebug, _PARAM::IsDeprecated, _PARAM::NoResetAll                                                  \
+		    _PARAM::IsDebug, _PARAM::IsDeprecated, _PARAM::NoResetAll, _PARAM::Rebind                                  \
 	}
 #define DUCKDB_GLOBAL_LOCAL(_PARAM)                                                                                    \
 	{                                                                                                                  \
 		_PARAM::Name, _PARAM::Description, _PARAM::InputType, _PARAM::SetGlobal, _PARAM::SetLocal,                     \
 		    _PARAM::ResetGlobal, _PARAM::ResetLocal, _PARAM::GetSetting, _PARAM::GetLocal,                             \
 		    SettingScopeTarget::INVALID, nullptr, nullptr, optional_idx(), _PARAM::IsDebug, _PARAM::IsDeprecated,      \
-		    _PARAM::NoResetAll                                                                                         \
+		    _PARAM::NoResetAll, _PARAM::Rebind                                                                         \
 	}
 #define FINAL_SETTING                                                                                                  \
 	{                                                                                                                  \
@@ -570,11 +570,13 @@ bool DBConfig::TryGetExtensionOption(const Identifier &name, ExtensionOption &re
 
 void DBConfig::AddExtensionOption(const Identifier &name, string description, LogicalType parameter,
                                   const Value &default_value, set_option_callback_t function,
-                                  reset_option_callback_t reset_function, SetScope default_scope, bool no_reset_all) {
+                                  reset_option_callback_t reset_function, SetScope default_scope, bool no_reset_all,
+                                  bool rebind) {
 	ExtensionOption extension_option(std::move(description), std::move(parameter), function, default_value,
 	                                 default_scope, false, false);
 	extension_option.reset_function = reset_function;
 	extension_option.no_reset_all = no_reset_all;
+	extension_option.rebind = rebind;
 	auto setting_index = user_settings.AddExtensionOption(name, std::move(extension_option));
 	// copy over unrecognized options, if they match the new extension option
 	auto iter = options.unrecognized_options.find(name);

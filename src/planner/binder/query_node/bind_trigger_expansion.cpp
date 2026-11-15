@@ -50,10 +50,6 @@ vector<const_reference<TriggerCatalogEntry>> Binder::FiringTriggers(TableCatalog
 	const auto role = GetReplicationRole(context);
 	vector<const_reference<TriggerCatalogEntry>> result;
 	for (auto &trigger : triggers) {
-		const auto firing = trigger.get().firing;
-		if (firing == TriggerFiring::ORIGIN || firing == TriggerFiring::REPLICA) {
-			GetStatementProperties().replication_role = role;
-		}
 		if (trigger.get().Fires(role)) {
 			result.push_back(trigger);
 		}

@@ -26,6 +26,7 @@ def extract_declarations(setting) -> str:
         f"    static constexpr bool IsDebug = {'true' if setting.is_debug else 'false'};\n"
         f"    static constexpr bool IsDeprecated = {'true' if setting.is_deprecated else 'false'};\n"
         f"    static constexpr bool NoResetAll = {'true' if setting.no_reset_all else 'false'};\n"
+        f"    static constexpr bool Rebind = {'true' if setting.rebind else 'false'};\n"
     )
     if not setting.is_generic_setting:
         # non-generic setting

@@ -146,8 +146,11 @@ public:
 	}
 	virtual void OnStatementEnd() {
 	}
-	virtual idx_t ActingRole() const {
-		return 0;
+	idx_t BindingGeneration() const {
+		return binding_generation.load(std::memory_order_relaxed);
+	}
+	void BumpBindingGeneration() {
+		binding_generation.fetch_add(1, std::memory_order_relaxed);
 	}
 
 public:
@@ -452,6 +455,7 @@ private:
 	mutex query_progress_lock;
 	//! The connection corresponding to this client context
 	connection_t connection_id;
+	atomic<idx_t> binding_generation {0};
 	//! Routing target for SQL execution while CONNECT-ed (CONNECT/DISCONNECT). When is_connected is
 	//! true and connected_to_database can be locked, the chokepoint dispatches non-control SQL via
 	//! `Catalog::RemoteExecute(string)` and wraps the returned TableRef into a SelectStatement.

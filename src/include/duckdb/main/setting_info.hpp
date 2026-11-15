@@ -99,6 +99,7 @@ struct ConfigurationOption {
 	bool is_debug = false;
 	bool is_deprecated = false;
 	bool no_reset_all = false;
+	bool rebind = false;
 };
 
 struct ConfigurationAlias {
@@ -131,6 +132,7 @@ struct ExtensionOption {
 	bool is_debug = false;
 	bool is_deprecated = false;
 	bool no_reset_all = false;
+	bool rebind = false;
 };
 
 } // namespace duckdb

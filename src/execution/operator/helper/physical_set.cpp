@@ -3,6 +3,7 @@
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/main/connection_manager.hpp"
 #include "duckdb/main/settings.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/setting_info.hpp"
@@ -11,6 +12,16 @@ namespace duckdb {
 
 void PhysicalSet::SetGenericVariable(ClientContext &context, idx_t setting_index, SetScope scope, Value target_value) {
 	Settings::Set(context, setting_index, scope, std::move(target_value));
+}
+
+void PhysicalSet::Rebind(ClientContext &context, SetScope scope) {
+	if (scope != SetScope::GLOBAL) {
+		context.BumpBindingGeneration();
+		return;
+	}
+	for (auto &connection : ConnectionManager::Get(context).GetConnectionList()) {
+		connection->BumpBindingGeneration();
+	}
 }
 
 Value PhysicalSet::SessionValue(ClientContext &context, const Identifier &name, optional_idx setting_index) {
@@ -69,6 +80,9 @@ void PhysicalSet::SetVariable(ClientContext &context, const Identifier &name, Se
 		context.OnSettingChange(name.GetIdentifierName(), scope,
 		                        SessionValue(context, name, extension_option.setting_index));
 		SetExtensionVariable(context, extension_option, name, scope, casted_value);
+		if (extension_option.rebind) {
+			Rebind(context, GetSettingScope(extension_option, scope));
+		}
 		return;
 	}
 	SetScope variable_scope = GetSettingScope(*option, scope);
@@ -83,6 +97,9 @@ void PhysicalSet::SetVariable(ClientContext &context, const Identifier &name, Se
 			option->set_callback(info, input_val);
 		}
 		SetGenericVariable(context, option->setting_idx.GetIndex(), variable_scope, std::move(input_val));
+		if (option->rebind) {
+			Rebind(context, variable_scope);
+		}
 		return;
 	}
 	switch (variable_scope) {
@@ -105,6 +122,9 @@ void PhysicalSet::SetVariable(ClientContext &context, const Identifier &name, Se
 		break;
 	default:
 		throw InternalException("Unsupported SetScope for variable");
+	}
+	if (option->rebind) {
+		Rebind(context, variable_scope);
 	}
 }
 

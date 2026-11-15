@@ -30,6 +30,7 @@ def add_all_settings_to_global_list():
         'is_debug',
         'is_deprecated',
         'no_reset_all',
+        'rebind',
     ]
 
     print(f"Parsing and sorting the settings data in {JSON_PATH}")
@@ -58,6 +59,7 @@ def add_all_settings_to_global_list():
             is_debug=entry.get('is_debug', False),
             is_deprecated=entry.get('is_deprecated', False),
             no_reset_all=entry.get('no_reset_all', False),
+            rebind=entry.get('rebind', False),
         )
         SettingsList.append(setting)
 

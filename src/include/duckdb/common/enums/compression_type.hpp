@@ -46,6 +46,7 @@ enum class CompressionType : uint8_t {
 	COMPRESSION_COL_ONPAIR = 108,
 	COMPRESSION_COL_DICT_FSST12 = 109,
 	COMPRESSION_COL_FSST12 = 110,
+	COMPRESSION_COL_NUMERIC = 111,
 	COMPRESSION_SERENEDB_COUNT // This has to stay the last SereneDB entry!
 };
 

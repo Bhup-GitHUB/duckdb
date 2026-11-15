@@ -101,9 +101,9 @@ void StatementProperties::RegisterDBRead(Catalog &catalog, ClientContext &contex
 	read_databases[catalog.GetName()] = catalog_identity;
 }
 
-void StatementProperties::RegisterDataRead(const CatalogEntry &entry, ClientContext &context) {
+void StatementProperties::RegisterDataRead(const CatalogEntry &entry, ClientContext &context, TableIndex table_index) {
 	if (const auto version = entry.GetDataVersion(context); version.IsValid()) {
-		data_reads.push_back({.entry = &entry, .version = version.GetIndex()});
+		data_reads.push_back({.entry = &entry, .version = version.GetIndex(), .table_index = table_index});
 	}
 }
 

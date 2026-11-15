@@ -303,7 +303,12 @@ BoundStatement Binder::BindTableFunctionInternal(BoundTableFunction &table_funct
 			throw BinderException("Failed to bind %s: nullptr returned from bind_replace without bind function",
 			                      table_function.GetName());
 		}
+		auto &data_reads = GetStatementProperties().data_reads;
+		const auto registered_reads = data_reads.size();
 		bind_data = table_function.bind(context, bind_input, return_types, return_names);
+		for (idx_t i = registered_reads; i < data_reads.size(); i++) {
+			data_reads[i].table_index = bind_index;
+		}
 		if (ref.with_ordinality == OrdinalityType::WITH_ORDINALITY) {
 			// check if column name 'ordinality' already exists and if so, replace it iteratively until free name is
 			// found

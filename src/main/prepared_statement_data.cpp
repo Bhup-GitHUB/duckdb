@@ -139,6 +139,9 @@ bool PreparedStatementData::RequireRebind(ClientContext &context,
 }
 
 bool PreparedStatementData::DataIsCurrent(ClientContext &context) const {
+	if (properties.point_reads_only) {
+		return true;
+	}
 	for (auto &read : properties.data_reads) {
 		const auto current = read.entry->GetDataVersion(context);
 		if (!current.IsValid() || current.GetIndex() != read.version) {

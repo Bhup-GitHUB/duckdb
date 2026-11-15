@@ -266,6 +266,29 @@ static bool ContainsUnversionedData(const LogicalOperator &op) {
 	return false;
 }
 
+static void CollectPointReads(const LogicalOperator &op, vector<TableIndex> &point_reads) {
+	if (op.type == LogicalOperatorType::LOGICAL_GET) {
+		auto &get = op.Cast<LogicalGet>();
+		if (get.bind_data && get.bind_data->IsPointRead()) {
+			point_reads.push_back(get.table_index);
+		}
+	}
+	for (auto &child : op.children) {
+		CollectPointReads(*child, point_reads);
+	}
+}
+
+static bool ReadsPointsOnly(const LogicalOperator &plan, const vector<StatementProperties::DataRead> &reads) {
+	if (reads.empty()) {
+		return false;
+	}
+	vector<TableIndex> point_reads;
+	CollectPointReads(plan, point_reads);
+	return std::all_of(reads.begin(), reads.end(), [&](const StatementProperties::DataRead &read) {
+		return std::find(point_reads.begin(), point_reads.end(), read.table_index) != point_reads.end();
+	});
+}
+
 template <class VISIT>
 static void VisitPreparedStatements(LogicalOperator &plan, VISIT &&visit) {
 	for (optional_ptr<LogicalOperator> op = &plan; op; op = op->children.empty() ? nullptr : op->children[0].get()) {
@@ -694,6 +717,9 @@ unique_ptr<LogicalOperator> Optimizer::Optimize(unique_ptr<LogicalOperator> plan
 			prepared.properties.always_require_rebind = true;
 		});
 	}
+	VisitPreparedStatements(*plan, [](const LogicalOperator &planned, PreparedStatementData &prepared) {
+		prepared.properties.point_reads_only = ReadsPointsOnly(planned, prepared.properties.data_reads);
+	});
 
 	Planner::VerifyPlan(context, plan);
 

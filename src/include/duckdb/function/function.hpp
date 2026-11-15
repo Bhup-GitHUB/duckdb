@@ -72,6 +72,7 @@ public:
 	DUCKDB_API virtual bool SupportStatementCache() const;
 	DUCKDB_API virtual bool ReadsParametersAtExecution() const;
 	DUCKDB_API virtual bool RegistersDataVersions() const;
+	DUCKDB_API virtual bool IsPointRead() const;
 
 	template <class TARGET>
 	TARGET &Cast() {

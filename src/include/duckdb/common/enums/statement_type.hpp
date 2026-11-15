@@ -12,6 +12,7 @@
 #include "duckdb/common/enums/result_eagerness.hpp"
 #include "duckdb/common/identifier.hpp"
 #include "duckdb/common/optional_idx.hpp"
+#include "duckdb/common/table_index.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/enums/database_modification_type.hpp"
@@ -113,6 +114,7 @@ struct StatementProperties {
 	struct DataRead {
 		const CatalogEntry *entry = nullptr;
 		idx_t version = 0;
+		TableIndex table_index;
 	};
 
 	//! The set of databases this statement will read from
@@ -122,6 +124,7 @@ struct StatementProperties {
 	vector<ViewScope> view_scopes;
 	vector<const CatalogEntry *> resolved_entries;
 	vector<DataRead> data_reads;
+	bool point_reads_only = false;
 	//! Whether or not the statement requires a valid transaction. Almost all statements require this, with the
 	//! exception of ROLLBACK
 	bool requires_valid_transaction;
@@ -144,7 +147,7 @@ struct StatementProperties {
 
 	void RegisterDBRead(Catalog &catalog, ClientContext &context);
 	void RegisterDBModify(Catalog &catalog, ClientContext &context, DatabaseModificationType modification);
-	void RegisterDataRead(const CatalogEntry &entry, ClientContext &context);
+	void RegisterDataRead(const CatalogEntry &entry, ClientContext &context, TableIndex table_index = TableIndex());
 };
 
 } // namespace duckdb

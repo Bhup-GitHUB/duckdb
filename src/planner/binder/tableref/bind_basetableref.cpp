@@ -253,7 +253,7 @@ BoundStatement Binder::Bind(BaseTableRef &ref) {
 		auto table_index = GenerateTableIndex();
 		auto &table = table_or_view->Cast<TableCatalogEntry>();
 
-		GetStatementProperties().RegisterDataRead(table, context);
+		GetStatementProperties().RegisterDataRead(table, context, table_index);
 
 		unique_ptr<FunctionData> bind_data;
 		auto scan_function = table.GetScanFunction(context, bind_data, table_lookup);

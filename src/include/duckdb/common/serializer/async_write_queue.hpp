@@ -415,6 +415,7 @@ private:
 	unique_ptr<AsyncWritePayload> CreateMaterializedPayload(idx_t end, idx_t size);
 	//! Release byte accounting for one submitted physical request.
 	void CompleteSubmittedWrite(idx_t offset, idx_t size, optional_ptr<const ErrorData> error);
+	idx_t LatchError(shared_ptr<const ErrorData> error) DUCKDB_REQUIRES(lock);
 	//! Latch one local scheduling failure, stop publication, and discard unsubmitted stream work.
 	void FailLocalScheduling(ErrorData error, idx_t unaccepted_size = 0);
 	//! Return the locally latched scheduling failure, if any. Caller must hold lock.
@@ -475,7 +476,7 @@ private:
 	idx_t next_registration_offset = 0;
 	//! Set after Close() has drained the queue. Further write registration is rejected.
 	bool closed = false;
-	//! First failure that occurred before a request entered the lower async queue.
+	//! First failure: a request the lower async queue refused, or a submitted write that failed.
 	shared_ptr<const ErrorData> local_error DUCKDB_GUARDED_BY(lock);
 };
 

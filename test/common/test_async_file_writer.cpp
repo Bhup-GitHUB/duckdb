@@ -2,6 +2,7 @@
 #include "duckdb.hpp"
 #include "duckdb/common/compressed_file_system.hpp"
 #include "duckdb/common/csv_writer.hpp"
+#include "duckdb/common/fault_points.hpp"
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/serializer/async_memory_governor.hpp"
@@ -1871,6 +1872,7 @@ TEST_CASE("AsyncFileWriter rethrows non-positional async write errors on close",
 		FAIL("Expected async write failure");
 	} catch (const Exception &ex) {
 		string error = ex.what();
+		INFO(error);
 		REQUIRE(error.find("Async write failed for range [offset=0, size=") != string::npos);
 		REQUIRE(error.find("Injected async write failure") != string::npos);
 	}
@@ -1879,6 +1881,60 @@ TEST_CASE("AsyncFileWriter rethrows non-positional async write errors on close",
 		fs.RemoveFile(path);
 	}
 }
+
+#ifdef SDB_FAULT_INJECTION
+TEST_CASE("AsyncFileWriter stops a sequential stream at a failed write before its task reports it",
+          "[async_file_writer]") {
+	DuckDB db(nullptr);
+	auto con = CreateConnectionWithAsyncThreads(db, 1);
+	BlockingWriteFileSystem fs(FileWriteMode::SEQUENTIAL, false);
+	auto path = TestCreatePath("async_file_writer_failed_completion.tmp");
+	if (fs.FileExists(path)) {
+		fs.RemoveFile(path);
+	}
+	fs.fail_writes = true;
+
+	string first(AsyncWriteConfig::REMOTE_COALESCE_THRESHOLD + 17, 'x');
+	string next(AsyncWriteConfig::REMOTE_COALESCE_THRESHOLD, 'y');
+
+	FaultPoints::Arm("async_write_failure_completed");
+	AsyncFileWriter writer(*con->context, fs, path);
+	writer.WriteData(make_uniq<StringAsyncWriteBuffer>(first));
+	REQUIRE(fs.WaitForBlockedWrites(1));
+	writer.WriteData(make_uniq<StringAsyncWriteBuffer>("tail"));
+	fs.ReleaseWrites();
+	auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (!FaultPoints::Armed("async_write_failure_completed:parked") && std::chrono::steady_clock::now() < deadline) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	auto parked = FaultPoints::Armed("async_write_failure_completed:parked");
+
+	string write_error;
+	try {
+		writer.WriteData(make_uniq<StringAsyncWriteBuffer>(next));
+	} catch (const Exception &ex) {
+		write_error = ex.what();
+	}
+	FaultPoints::Clear();
+	REQUIRE(parked);
+	INFO(write_error);
+	REQUIRE(write_error.find("Async write failed for range [offset=0, size=") != string::npos);
+
+	string close_error;
+	try {
+		writer.Close();
+	} catch (const Exception &ex) {
+		close_error = ex.what();
+	}
+	INFO(close_error);
+	REQUIRE(close_error.find("Async write failed for range [offset=0, size=") != string::npos);
+	REQUIRE(fs.BlockedWrites() == 1);
+
+	if (fs.FileExists(path)) {
+		fs.RemoveFile(path);
+	}
+}
+#endif
 
 TEST_CASE("AsyncFileWriter close drains an open batch", "[async_file_writer]") {
 	DuckDB db(nullptr);

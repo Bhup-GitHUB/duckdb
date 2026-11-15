@@ -3,6 +3,7 @@
 #include "duckdb/common/algorithm.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
+#include "duckdb/common/fault_points.hpp"
 #include "duckdb/common/helper.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/parallel/task_executor.hpp"
@@ -350,6 +351,7 @@ void AsyncWriteQueue::WriteRequest(AsyncWriteRequest request) {
 	request.payload.reset();
 	if (has_error) {
 		CompleteRequest(request, request_size, write_error);
+		SDB_PARK_ONCE_ON_FAILURE("async_write_failure_completed");
 		write_error.Throw();
 	}
 	CompleteRequest(request, request_size, nullptr);
@@ -1403,20 +1405,36 @@ void ManagedAsyncWriteStreamQueue::CompleteSubmittedWrite(idx_t offset, idx_t si
 	(void)offset;
 	bool refill = false;
 	auto refill_policy = SchedulePolicy::THRESHOLD;
+	idx_t discarded_bytes = 0;
 	{
 		annotated_lock_guard<annotated_mutex> guard(lock);
 		D_ASSERT(submitted_requests > 0);
 		submitted_requests--;
 		D_ASSERT(submitted_bytes >= size);
 		submitted_bytes -= size;
+		if (error && !closed && !local_error) {
+			discarded_bytes = LatchError(make_shared_ptr<ErrorData>(*error));
+		}
 		refill = !error && !closed && !local_error && batch_depth == 0 && !pending_writes.empty();
 		if (force_completion_refill) {
 			refill_policy = SchedulePolicy::FORCE;
 		}
 	}
+	write_queue->DiscardExternalPendingBytes(discarded_bytes);
 	if (refill) {
 		SchedulePendingWritesInternal(refill_policy);
 	}
+}
+
+idx_t ManagedAsyncWriteStreamQueue::LatchError(shared_ptr<const ErrorData> error) {
+	D_ASSERT(!local_error);
+	auto discarded_bytes = pending_bytes;
+	pending_writes.clear();
+	pending_bytes = 0;
+	batch_depth = 0;
+	force_completion_refill = false;
+	local_error = std::move(error);
+	return discarded_bytes;
 }
 
 void ManagedAsyncWriteStreamQueue::FailLocalScheduling(ErrorData error, idx_t unaccepted_size) {
@@ -1433,12 +1451,7 @@ void ManagedAsyncWriteStreamQueue::FailLocalScheduling(ErrorData error, idx_t un
 			D_ASSERT(submitted_bytes >= unaccepted_size);
 			submitted_bytes -= unaccepted_size;
 		}
-		discarded_bytes = pending_bytes + unaccepted_size;
-		pending_writes.clear();
-		pending_bytes = 0;
-		batch_depth = 0;
-		force_completion_refill = false;
-		local_error = std::move(new_error);
+		discarded_bytes = LatchError(std::move(new_error)) + unaccepted_size;
 	}
 	write_queue->DiscardExternalPendingBytes(discarded_bytes);
 }

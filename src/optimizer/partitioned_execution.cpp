@@ -316,15 +316,22 @@ struct PartitionedExecutionRange {
 static pair<idx_t, vector<PartitionedExecutionRange>>
 PartitionedExecutionComputeRanges(LogicalOperator &op, vector<PartitionedExecutionColumn> &columns,
                                   const vector<PartitionStatistics> &partition_stats, const idx_t num_threads) {
-	auto column_stats_nodes = PartitionedExecutionCollectStatsNodes(op, columns, partition_stats);
-	if (columns.empty()) {
-		return {}; // None of the columns ended up being eligible
-	}
-
 	// Tuned constants for finding reasonable partitions
 	const auto min_row_groups_per_partition =
 	    num_threads * PartitionedExecutionConfig::MIN_ROW_GROUPS_PER_THREAD_PER_PARTITION;
 	const auto min_partition_count = min_row_groups_per_partition * DEFAULT_ROW_GROUP_SIZE;
+	idx_t total_count = 0;
+	for (auto &ps : partition_stats) {
+		total_count += ps.count;
+	}
+	if (total_count < min_partition_count) {
+		return {};
+	}
+
+	auto column_stats_nodes = PartitionedExecutionCollectStatsNodes(op, columns, partition_stats);
+	if (columns.empty()) {
+		return {}; // None of the columns ended up being eligible
+	}
 
 	// Sort indices based on the values in the stats nodes
 	idx_t max_col_idx = 0;

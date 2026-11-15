@@ -101,19 +101,22 @@ struct SortKeyVectorData {
 	static constexpr data_t LIST_DELIMITER = 0;
 	static constexpr data_t BLOB_ESCAPE_CHARACTER = 1;
 
-	SortKeyVectorData(const Vector &input, idx_t size, OrderModifiers modifiers) : vec(input) {
+	static data_t NullByte(OrderByNullType null_type) {
+		return null_type == OrderByNullType::NULLS_LAST ? NULL_LAST_BYTE : NULL_FIRST_BYTE;
+	}
+
+	static data_t ValidByte(OrderByNullType null_type) {
+		return null_type == OrderByNullType::NULLS_LAST ? NULL_FIRST_BYTE : NULL_LAST_BYTE;
+	}
+
+	SortKeyVectorData(const Vector &input, idx_t size, OrderModifiers modifiers)
+	    : vec(input), null_byte(NullByte(modifiers.null_type)), valid_byte(ValidByte(modifiers.null_type)) {
 		if (size != 0) {
 			input.ToUnifiedFormat(format);
 		} else {
 			format.physical_type = input.GetType().InternalType();
 		}
 		this->size = size;
-
-		null_byte = NULL_FIRST_BYTE;
-		valid_byte = NULL_LAST_BYTE;
-		if (modifiers.null_type == OrderByNullType::NULLS_LAST) {
-			std::swap(null_byte, valid_byte);
-		}
 
 		// NULLS FIRST/NULLS LAST passed in by the user are only respected at the top level
 		// within nested types NULLS LAST/NULLS FIRST is dependent on ASC/DESC order instead
@@ -955,6 +958,60 @@ static void AssertSortKeyRoundTrip(vector<unique_ptr<SortKeyVectorData>> &sort_k
 
 } // namespace
 
+template <class OP>
+static idx_t EncodeSortKeyValue(const_data_ptr_t value, bool flip_bytes, data_ptr_t result) {
+	const auto input = Load<typename OP::TYPE>(value);
+	return flip_bytes ? OP::template Encode<true>(result, input) : OP::template Encode<false>(result, input);
+}
+
+idx_t CreateSortKeyHelpers::CreateSortKey(const LogicalType &type, const_data_ptr_t value, OrderModifiers modifiers,
+                                          data_ptr_t result) {
+	if (!value) {
+		result[0] = SortKeyVectorData::NullByte(modifiers.null_type);
+		return 1;
+	}
+	result[0] = SortKeyVectorData::ValidByte(modifiers.null_type);
+	const auto flip = modifiers.order_type == OrderType::DESCENDING;
+	const auto out = result + 1;
+	switch (type.InternalType()) {
+	case PhysicalType::BOOL:
+		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<bool>>(value, flip, out);
+	case PhysicalType::UINT8:
+		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<uint8_t>>(value, flip, out);
+	case PhysicalType::INT8:
+		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<int8_t>>(value, flip, out);
+	case PhysicalType::UINT16:
+		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<uint16_t>>(value, flip, out);
+	case PhysicalType::INT16:
+		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<int16_t>>(value, flip, out);
+	case PhysicalType::UINT32:
+		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<uint32_t>>(value, flip, out);
+	case PhysicalType::INT32:
+		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<int32_t>>(value, flip, out);
+	case PhysicalType::UINT64:
+		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<uint64_t>>(value, flip, out);
+	case PhysicalType::INT64:
+		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<int64_t>>(value, flip, out);
+	case PhysicalType::FLOAT:
+		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<float>>(value, flip, out);
+	case PhysicalType::DOUBLE:
+		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<double>>(value, flip, out);
+	case PhysicalType::INTERVAL:
+		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<interval_t>>(value, flip, out);
+	case PhysicalType::UINT128:
+		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<uhugeint_t>>(value, flip, out);
+	case PhysicalType::INT128:
+		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<hugeint_t>>(value, flip, out);
+	case PhysicalType::VARCHAR:
+		if (type.id() == LogicalTypeId::VARCHAR) {
+			return 1 + EncodeSortKeyValue<SortKeyVarcharOperator>(value, flip, out);
+		}
+		return 1 + EncodeSortKeyValue<SortKeyBlobOperator>(value, flip, out);
+	default:
+		throw NotImplementedException("Unsupported type %s in CreateSortKey", type);
+	}
+}
+
 void CreateSortKeyHelpers::CreateSortKey(DataChunk &input, const vector<OrderModifiers> &modifiers,
                                          data_ptr_t *targets) {
 	D_ASSERT(modifiers.size() == input.ColumnCount());
@@ -1092,13 +1149,9 @@ unique_ptr<FunctionData> DecodeSortKeyBind(BindScalarFunctionInput &input) {
 
 struct DecodeSortKeyVectorData {
 	DecodeSortKeyVectorData(const LogicalType &type, OrderModifiers modifiers)
-	    : flip_bytes(modifiers.order_type == OrderType::DESCENDING) {
-		null_byte = SortKeyVectorData::NULL_FIRST_BYTE;
-		valid_byte = SortKeyVectorData::NULL_LAST_BYTE;
-		if (modifiers.null_type == OrderByNullType::NULLS_LAST) {
-			std::swap(null_byte, valid_byte);
-		}
-
+	    : null_byte(SortKeyVectorData::NullByte(modifiers.null_type)),
+	      valid_byte(SortKeyVectorData::ValidByte(modifiers.null_type)),
+	      flip_bytes(modifiers.order_type == OrderType::DESCENDING) {
 		// NULLS FIRST/NULLS LAST passed in by the user are only respected at the top level
 		// within nested types NULLS LAST/NULLS FIRST is dependent on ASC/DESC order instead
 		// don't blame me this is what Postgres does
@@ -1412,11 +1465,7 @@ void DecodeSortKeyRecursive(DecodeSortKeyData decode_data[], DecodeSortKeyVector
 } // namespace
 
 bool CreateSortKeyHelpers::IsNullSortKey(const_data_ptr_t data, OrderByNullType null_order) {
-	auto null_byte = SortKeyVectorData::NULL_FIRST_BYTE;
-	if (null_order == OrderByNullType::NULLS_LAST) {
-		null_byte = SortKeyVectorData::NULL_LAST_BYTE;
-	}
-	return data[0] == null_byte;
+	return data[0] == SortKeyVectorData::NullByte(null_order);
 }
 
 idx_t CreateSortKeyHelpers::DecodeSortKey(string_t sort_key, Vector &result, idx_t result_idx,

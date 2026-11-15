@@ -1,7 +1,6 @@
 #include "duckdb/storage/table/row_group_reorderer.hpp"
 
-#include "duckdb/common/bswap.hpp"
-#include "duckdb/common/radix.hpp"
+#include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/storage/statistics/numeric_stats.hpp"
 #include "duckdb/storage/statistics/string_stats.hpp"
 
@@ -9,56 +8,57 @@ namespace duckdb {
 
 namespace {
 
-constexpr idx_t STRING_PREFIX_SIZE = StringStatsData::CURRENT_MAX_STRING_MINMAX_SIZE;
-
 template <class T>
-bool EncodeNumeric(const BaseStatistics &stats, bool min, data_ptr_t bytes) {
+bool EncodeNumeric(const BaseStatistics &stats, bool min, OrderModifiers modifiers, data_ptr_t key) {
 	if (!NumericStats::HasMinMax(stats)) {
 		return false;
 	}
-	Radix::EncodeData<T>(bytes, min ? NumericStats::GetMinUnsafe<T>(stats) : NumericStats::GetMaxUnsafe<T>(stats));
+	const T value = min ? NumericStats::GetMinUnsafe<T>(stats) : NumericStats::GetMaxUnsafe<T>(stats);
+	CreateSortKeyHelpers::CreateSortKey(stats.GetType(), const_data_ptr_cast(&value), modifiers, key);
 	return true;
 }
 
-bool EncodeString(const BaseStatistics &stats, bool min, data_ptr_t bytes) {
+bool EncodeString(const BaseStatistics &stats, bool min, OrderModifiers modifiers, data_ptr_t key) {
+	if (stats.GetType().id() != LogicalTypeId::VARCHAR) {
+		throw InternalException("RowGroupOrderKey: unsupported type %s", stats.GetType().ToString());
+	}
 	if (!StringStats::HasMinMax(stats)) {
 		return false;
 	}
 	const auto value = min ? StringStats::GetMinUnsafe(stats) : StringStats::GetMaxUnsafe(stats);
-	const idx_t size = value.size();
-	memcpy(bytes, value.data(), MinValue(size, STRING_PREFIX_SIZE));
-	bytes[STRING_PREFIX_SIZE] = static_cast<data_t>(MinValue(size, STRING_PREFIX_SIZE + 1));
+	const string_t prefix(value.data(), UnsafeNumericCast<uint32_t>(value.size()));
+	CreateSortKeyHelpers::CreateSortKey(stats.GetType(), const_data_ptr_cast(&prefix), modifiers, key);
 	return true;
 }
 
-bool Encode(const BaseStatistics &stats, bool min, data_ptr_t bytes) {
+bool Encode(const BaseStatistics &stats, bool min, OrderModifiers modifiers, data_ptr_t key) {
 	switch (stats.GetType().InternalType()) {
 	case PhysicalType::INT8:
-		return EncodeNumeric<int8_t>(stats, min, bytes);
+		return EncodeNumeric<int8_t>(stats, min, modifiers, key);
 	case PhysicalType::INT16:
-		return EncodeNumeric<int16_t>(stats, min, bytes);
+		return EncodeNumeric<int16_t>(stats, min, modifiers, key);
 	case PhysicalType::INT32:
-		return EncodeNumeric<int32_t>(stats, min, bytes);
+		return EncodeNumeric<int32_t>(stats, min, modifiers, key);
 	case PhysicalType::INT64:
-		return EncodeNumeric<int64_t>(stats, min, bytes);
+		return EncodeNumeric<int64_t>(stats, min, modifiers, key);
 	case PhysicalType::INT128:
-		return EncodeNumeric<hugeint_t>(stats, min, bytes);
+		return EncodeNumeric<hugeint_t>(stats, min, modifiers, key);
 	case PhysicalType::UINT8:
-		return EncodeNumeric<uint8_t>(stats, min, bytes);
+		return EncodeNumeric<uint8_t>(stats, min, modifiers, key);
 	case PhysicalType::UINT16:
-		return EncodeNumeric<uint16_t>(stats, min, bytes);
+		return EncodeNumeric<uint16_t>(stats, min, modifiers, key);
 	case PhysicalType::UINT32:
-		return EncodeNumeric<uint32_t>(stats, min, bytes);
+		return EncodeNumeric<uint32_t>(stats, min, modifiers, key);
 	case PhysicalType::UINT64:
-		return EncodeNumeric<uint64_t>(stats, min, bytes);
+		return EncodeNumeric<uint64_t>(stats, min, modifiers, key);
 	case PhysicalType::UINT128:
-		return EncodeNumeric<uhugeint_t>(stats, min, bytes);
+		return EncodeNumeric<uhugeint_t>(stats, min, modifiers, key);
 	case PhysicalType::FLOAT:
-		return EncodeNumeric<float>(stats, min, bytes);
+		return EncodeNumeric<float>(stats, min, modifiers, key);
 	case PhysicalType::DOUBLE:
-		return EncodeNumeric<double>(stats, min, bytes);
+		return EncodeNumeric<double>(stats, min, modifiers, key);
 	case PhysicalType::VARCHAR:
-		return EncodeString(stats, min, bytes);
+		return EncodeString(stats, min, modifiers, key);
 	default:
 		throw InternalException("RowGroupOrderKey: unsupported type %s", stats.GetType().ToString());
 	}
@@ -82,7 +82,11 @@ bool IsNullOnly(const BaseStatistics &stats) {
 }
 
 RowGroupOrderKey StatKey(const BaseStatistics &stats, const OrderByStatistics order_by, const OrderType order_type) {
-	return RowGroupOrderKey::Get(stats, order_by, order_type, OrderByNullType::NULLS_LAST);
+	return RowGroupOrderKeys::Get(stats, order_by, order_type, OrderByNullType::NULLS_LAST);
+}
+
+bool IsNullStatKey(const RowGroupOrderKey &key) {
+	return RowGroupOrderKeys::IsNull(key, OrderByNullType::NULLS_LAST);
 }
 
 OrderByStatistics Opposite(const OrderByStatistics order_by) {
@@ -242,28 +246,28 @@ OffsetPruningResult FindOffsetPrunableChunks(const RowGroupOffsetMap &row_groups
 
 } // namespace
 
-RowGroupOrderKey RowGroupOrderKey::Null(OrderByNullType null_order) {
-	RowGroupOrderKey key;
-	key.part0 = (null_order == OrderByNullType::NULLS_FIRST ? NULLS_FIRST_MARKER : NULLS_LAST_MARKER) << MARKER_SHIFT;
+RowGroupOrderKey RowGroupOrderKeys::Get(const BaseStatistics &stats, OrderByStatistics order_by, OrderType order_type,
+                                        OrderByNullType null_order) {
+	auto key = RowGroupOrderKey();
+	if (!Encode(stats, order_by == OrderByStatistics::MIN, OrderModifiers(order_type, null_order),
+	            data_ptr_cast(&key.part0))) {
+		return Null(null_order);
+	}
+	key.ByteSwap();
 	return key;
 }
 
-RowGroupOrderKey RowGroupOrderKey::Get(const BaseStatistics &stats, OrderByStatistics order_by, OrderType order_type,
-                                       OrderByNullType null_order) {
-	data_t bytes[sizeof(RowGroupOrderKey)] = {VALUE_MARKER};
-	if (!Encode(stats, order_by == OrderByStatistics::MIN, bytes + 1)) {
-		return Null(null_order);
-	}
-	RowGroupOrderKey key;
-	key.part0 = BSwapIfLE(Load<uint64_t>(bytes));
-	key.part1 = BSwapIfLE(Load<uint64_t>(bytes + sizeof(uint64_t)));
-	key.part2 = BSwapIfLE(Load<uint64_t>(bytes + 2 * sizeof(uint64_t)));
-	if (order_type == OrderType::DESCENDING) {
-		key.part0 ^= ~(~uint64_t(0) << MARKER_SHIFT);
-		key.part1 = ~key.part1;
-		key.part2 = ~key.part2;
-	}
+RowGroupOrderKey RowGroupOrderKeys::Null(OrderByNullType null_order) {
+	auto key = RowGroupOrderKey();
+	CreateSortKeyHelpers::CreateSortKey(LogicalType::SQLNULL, nullptr, OrderModifiers(OrderType::ASCENDING, null_order),
+	                                    data_ptr_cast(&key.part0));
+	key.ByteSwap();
 	return key;
+}
+
+bool RowGroupOrderKeys::IsNull(const RowGroupOrderKey &key, OrderByNullType null_order) {
+	const auto first_byte = static_cast<data_t>(key.part0 >> 56);
+	return CreateSortKeyHelpers::IsNullSortKey(&first_byte, null_order);
 }
 
 RowGroupReorderer::RowGroupReorderer(const RowGroupOrderOptions &options_p, TransactionData transaction_p)
@@ -318,7 +322,7 @@ OffsetPruningResult RowGroupReorderer::GetOffsetAfterPruning(const OrderByStatis
 			continue;
 		}
 		auto comparison_value = StatKey(*column_stats, order_by, order_type);
-		if (comparison_value.IsNull()) {
+		if (IsNullStatKey(comparison_value)) {
 			if (null_order == OrderByNullType::NULLS_LAST && IsNullOnly(*column_stats)) {
 				// With NULLS_LAST, null-stats row groups are scanned after all non-null row groups.
 				// They fall outside the offset range being pruned here, so skip them.
@@ -373,7 +377,8 @@ optional_ptr<SegmentNode<RowGroup>> RowGroupReorderer::GetRootSegment(RowGroupSe
 			continue;
 		}
 		auto comparison_value = StatKey(*stats, options.order_by, options.order_type);
-		if (comparison_value.IsNull() || (options.null_order == OrderByNullType::NULLS_FIRST && stats->CanHaveNull())) {
+		if (IsNullStatKey(comparison_value) ||
+		    (options.null_order == OrderByNullType::NULLS_FIRST && stats->CanHaveNull())) {
 			// No trustworthy ordering statistics, or the row group might still contribute NULLs that must be scanned
 			// before definitely non-null groups with NULLS_FIRST.
 			ambiguous_groups.push_back(row_group);

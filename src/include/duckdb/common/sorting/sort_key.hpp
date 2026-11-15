@@ -14,6 +14,8 @@
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/common/types/string_type.hpp"
 
+#include <compare>
+
 namespace duckdb {
 
 enum class SortKeyType : uint8_t {
@@ -222,6 +224,19 @@ public:
 
 	friend bool operator<(const SORT_KEY &lhs, const SORT_KEY &rhs) {
 		return SortKeyLessThan<SORT_KEY::PARTS>(&lhs.part0, &rhs.part0);
+	}
+
+	friend bool operator==(const SORT_KEY &lhs, const SORT_KEY &rhs) {
+		return (lhs <=> rhs) == 0;
+	}
+
+	friend std::strong_ordering operator<=>(const SORT_KEY &lhs, const SORT_KEY &rhs) {
+		for (idx_t i = 0; i < SORT_KEY::PARTS; i++) {
+			if (const auto order = (&lhs.part0)[i] <=> (&rhs.part0)[i]; order != 0) {
+				return order;
+			}
+		}
+		return std::strong_ordering::equal;
 	}
 };
 

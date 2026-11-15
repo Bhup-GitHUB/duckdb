@@ -16,6 +16,8 @@
 #include "duckdb/storage/buffer/block_handle.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 
+#include <absl/base/optimization.h>
+
 namespace duckdb {
 
 class BlockManager;
@@ -204,9 +206,9 @@ protected:
 	//! The variables related to temporary file management
 	TemporaryFileData temporary_directory;
 	//! The temporary id used for managed buffers
-	atomic<block_id_t> temporary_id;
+	ABSL_CACHELINE_ALIGNED atomic<block_id_t> temporary_id;
 	//! Allocator associated with the buffer manager, that passes all allocations through this buffer manager
-	Allocator buffer_allocator;
+	ABSL_CACHELINE_ALIGNED Allocator buffer_allocator;
 	//! Block manager for temp data
 	unique_ptr<BlockManager> temp_block_manager;
 	//! Temporary evicted memory data per tag

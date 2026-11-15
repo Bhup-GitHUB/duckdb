@@ -4,6 +4,7 @@
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/arena_containers/arena_vector.hpp"
+#include "duckdb/common/sorting/sort_key_boundary.hpp"
 #include "duckdb/common/types/row/tuple_data_layout.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/create_sort_key.hpp"
@@ -36,44 +37,6 @@ struct TopNScanState {
 	SelectionVector sel;
 };
 
-struct TopNBoundaryValue {
-	explicit TopNBoundaryValue(const PhysicalTopN &op)
-	    : op(op), boundary_vector(op.orders[0].expression->GetReturnType()),
-	      boundary_modifiers(op.orders[0].type, op.orders[0].null_order) {
-	}
-
-	const PhysicalTopN &op;
-	mutex lock;
-	string boundary_value;
-	bool is_set = false;
-	atomic<idx_t> version {0};
-	Vector boundary_vector;
-	OrderModifiers boundary_modifiers;
-
-	string GetBoundaryValue() {
-		lock_guard<mutex> l(lock);
-		return boundary_value;
-	}
-
-	void UpdateValue(string_t boundary_val) {
-		unique_lock<mutex> l(lock);
-		if (!is_set || boundary_val < string_t(boundary_value)) {
-			boundary_value = boundary_val.GetString();
-			is_set = true;
-			version.store(version.load(std::memory_order_relaxed) + 1, std::memory_order_release);
-			if (op.dynamic_filter) {
-				// DecodeSortKey only ever clears validity, so the reused vector has to start out valid:
-				// otherwise the first NULL boundary pins every later one to NULL and the filter never arms.
-				FlatVector::ValidityMutable(boundary_vector).SetAllValid(1);
-				CreateSortKeyHelpers::DecodeSortKey(boundary_val, boundary_vector, 0, boundary_modifiers);
-				auto new_dynamic_value = boundary_vector.GetValue(0);
-				l.unlock();
-				op.dynamic_filter->SetValue(std::move(new_dynamic_value));
-			}
-		}
-	}
-};
-
 class TopNHeap {
 public:
 	TopNHeap(ClientContext &context, const PhysicalTopN &op);
@@ -94,19 +57,11 @@ public:
 
 	SelectionVector matching_sel;
 
-	DataChunk compare_chunk;
-	//! Cached global boundary value as a set of constant vectors
-	DataChunk boundary_values;
-	//! Cached global boundary value in sort-key format
-	string boundary_val;
-	idx_t boundary_version = 0;
-	SelectionVector final_sel;
-	SelectionVector true_sel;
-	SelectionVector false_sel;
-	SelectionVector new_remaining_sel;
+	unique_ptr<SortKeyBoundaryFilter> boundary_filter;
+	SelectionVector boundary_sel;
 
 public:
-	void Sink(DataChunk &input, optional_ptr<TopNBoundaryValue> boundary_value = nullptr);
+	void Sink(DataChunk &input, optional_ptr<SortKeyBoundary> boundary = nullptr);
 	virtual void Combine(TopNHeap &other) = 0;
 	virtual void Reduce() = 0;
 	virtual void Finalize() = 0;
@@ -115,7 +70,7 @@ public:
 	virtual void InitializeScan(TopNScanState &state, bool exclude_offset) = 0;
 	void Scan(TopNScanState &state, DataChunk &chunk, idx_t &pos);
 
-	bool CheckBoundaryValues(DataChunk &sort_chunk, DataChunk &payload, TopNBoundaryValue &boundary_val);
+	bool CheckBoundaryValues(DataChunk &sort_chunk, DataChunk &payload, const SortKeyBoundary &boundary);
 
 	template <class TARGET>
 	TARGET &Cast() {
@@ -134,7 +89,7 @@ public:
 
 protected:
 	virtual void AddRows(DataChunk &input) = 0;
-	virtual void PublishBoundary(TopNBoundaryValue &boundary) = 0;
+	virtual void PublishBoundary(SortKeyBoundary &boundary) = 0;
 };
 
 template <SortKeyType SORT_KEY_TYPE>
@@ -163,7 +118,7 @@ public:
 
 private:
 	void AddRows(DataChunk &input) override;
-	void PublishBoundary(TopNBoundaryValue &boundary) override;
+	void PublishBoundary(SortKeyBoundary &boundary) override;
 
 	void AddSmallHeap(DataChunk &input);
 	void AddLargeHeap(DataChunk &input);
@@ -270,8 +225,7 @@ private:
 TopNHeap::TopNHeap(ClientContext &context, const PhysicalTopN &op)
     : allocator(BufferAllocator::Get(context)), payload_types(op.children[0].get().types), orders(op.orders),
       projections(op.projections), limit(op.limit), offset(op.offset), heap_size(op.limit + op.offset),
-      executor(context), matching_sel(STANDARD_VECTOR_SIZE), final_sel(STANDARD_VECTOR_SIZE),
-      true_sel(STANDARD_VECTOR_SIZE), false_sel(STANDARD_VECTOR_SIZE), new_remaining_sel(STANDARD_VECTOR_SIZE) {
+      executor(context), matching_sel(STANDARD_VECTOR_SIZE), boundary_sel(STANDARD_VECTOR_SIZE) {
 	// initialize the executor and the sort_chunk
 	vector<LogicalType> sort_types;
 	for (auto &order : orders) {
@@ -284,8 +238,7 @@ TopNHeap::TopNHeap(ClientContext &context, const PhysicalTopN &op)
 	sort_keys.Initialize(allocator, sort_keys_type);
 	heap_data.Initialize(allocator, payload_types, InitialHeapAllocSize());
 	sort_chunk.Initialize(allocator, sort_types);
-	compare_chunk.Initialize(allocator, sort_types);
-	boundary_values.Initialize(allocator, sort_types);
+	boundary_filter = make_uniq<SortKeyBoundaryFilter>(allocator, sort_types, modifiers);
 }
 
 static unique_ptr<TopNHeap> CreateTopNHeap(ClientContext &context, const PhysicalTopN &op) {
@@ -312,10 +265,10 @@ void TopNKeyHeap<SORT_KEY_TYPE>::AddRows(DataChunk &input) {
 }
 
 template <SortKeyType SORT_KEY_TYPE>
-void TopNKeyHeap<SORT_KEY_TYPE>::PublishBoundary(TopNBoundaryValue &boundary) {
+void TopNKeyHeap<SORT_KEY_TYPE>::PublishBoundary(SortKeyBoundary &boundary) {
 	// note that the global boundary only applies to FULL heaps
 	if (!heap.empty() && heap.size() >= heap_size) {
-		boundary.UpdateValue(KeyBytes(heap.front()));
+		boundary.Update(KeyBytes(heap.front()));
 	}
 }
 
@@ -382,84 +335,23 @@ void TopNKeyHeap<SORT_KEY_TYPE>::AddLargeHeap(DataChunk &input) {
 	heap_data.Append(input, matching_sel, match_count, VectorAppendMode::ALLOW_RESIZE);
 }
 
-bool TopNHeap::CheckBoundaryValues(DataChunk &sort_chunk, DataChunk &payload, TopNBoundaryValue &global_boundary) {
-	const auto version = global_boundary.version.load(std::memory_order_acquire);
-	if (version == 0) {
+bool TopNHeap::CheckBoundaryValues(DataChunk &sort_chunk, DataChunk &payload, const SortKeyBoundary &boundary) {
+	if (!boundary_filter->Refresh(boundary)) {
 		return true;
 	}
-	if (version != boundary_version) {
-		boundary_version = version;
-		boundary_val = global_boundary.GetBoundaryValue();
-		boundary_values.Reset();
-		CreateSortKeyHelpers::DecodeSortKey(string_t(boundary_val), boundary_values, 0, modifiers);
-		for (auto &col : boundary_values.data) {
-			col.SetVectorType(VectorType::CONSTANT_VECTOR);
-		}
-	}
-	boundary_values.SetChildCardinality(sort_chunk.size());
-
-	// we have boundary values
-	// from these boundary values, determine which values we should insert (if any)
-	idx_t final_count = 0;
-
-	SelectionVector remaining_sel(nullptr);
-	idx_t remaining_count = sort_chunk.size();
-	for (idx_t i = 0; i < orders.size() && remaining_count > 0; i++) {
-		if (remaining_sel.data()) {
-			compare_chunk.data[i].Slice(sort_chunk.data[i], remaining_sel, remaining_count);
-		} else {
-			compare_chunk.data[i].Reference(sort_chunk.data[i]);
-		}
-		bool is_last = i + 1 == orders.size();
-		idx_t true_count;
-		if (orders[i].null_order == OrderByNullType::NULLS_LAST) {
-			if (orders[i].type == OrderType::ASCENDING) {
-				true_count = VectorOperations::DistinctLessThan(compare_chunk.data[i], boundary_values.data[i],
-				                                                &remaining_sel, remaining_count, &true_sel, &false_sel);
-			} else {
-				true_count = VectorOperations::DistinctGreaterThanNullsFirst(compare_chunk.data[i],
-				                                                             boundary_values.data[i], &remaining_sel,
-				                                                             remaining_count, &true_sel, &false_sel);
-			}
-		} else {
-			D_ASSERT(orders[i].null_order == OrderByNullType::NULLS_FIRST);
-			if (orders[i].type == OrderType::ASCENDING) {
-				true_count = VectorOperations::DistinctLessThanNullsFirst(compare_chunk.data[i],
-				                                                          boundary_values.data[i], &remaining_sel,
-				                                                          remaining_count, &true_sel, &false_sel);
-			} else {
-				true_count =
-				    VectorOperations::DistinctGreaterThan(compare_chunk.data[i], boundary_values.data[i],
-				                                          &remaining_sel, remaining_count, &true_sel, &false_sel);
-			}
-		}
-
-		if (true_count > 0) {
-			memcpy(final_sel.data() + final_count, true_sel.data(), true_count * sizeof(sel_t));
-			final_count += true_count;
-		}
-		idx_t false_count = remaining_count - true_count;
-		if (!is_last && false_count > 0) {
-			// check what we should continue to check
-			compare_chunk.data[i].Slice(sort_chunk.data[i], false_sel, false_count);
-			remaining_count = VectorOperations::NotDistinctFrom(compare_chunk.data[i], boundary_values.data[i],
-			                                                    &false_sel, false_count, &new_remaining_sel, nullptr);
-			remaining_sel.Initialize(new_remaining_sel);
-		} else {
-			break;
-		}
-	}
-	if (final_count == 0) {
+	idx_t before;
+	const auto count = boundary_filter->Select(sort_chunk, false, boundary_sel, before);
+	if (count == 0) {
 		return false;
 	}
-	if (final_count < sort_chunk.size()) {
-		sort_chunk.Slice(final_sel, final_count);
-		payload.Slice(final_sel, final_count);
+	if (count < sort_chunk.size()) {
+		sort_chunk.Slice(boundary_sel, count);
+		payload.Slice(boundary_sel, count);
 	}
 	return true;
 }
 
-void TopNHeap::Sink(DataChunk &input, optional_ptr<TopNBoundaryValue> global_boundary) {
+void TopNHeap::Sink(DataChunk &input, optional_ptr<SortKeyBoundary> global_boundary) {
 	if (heap_size == 0) {
 		// LIMIT 0 without OFFSET - the heap can never hold any entry, so there is nothing to do
 		return;
@@ -585,12 +477,14 @@ void TopNHeap::Scan(TopNScanState &state, DataChunk &chunk, idx_t &pos) {
 class TopNGlobalSinkState : public GlobalSinkState {
 public:
 	TopNGlobalSinkState(ClientContext &context, const PhysicalTopN &op)
-	    : heap(CreateTopNHeap(context, op)), boundary_value(op) {
+	    : heap(CreateTopNHeap(context, op)),
+	      boundary_value(op.orders[0].expression->GetReturnType(),
+	                     OrderModifiers(op.orders[0].type, op.orders[0].null_order), op.dynamic_filter) {
 	}
 
 	mutex lock;
 	unique_ptr<TopNHeap> heap;
-	TopNBoundaryValue boundary_value;
+	SortKeyBoundary boundary_value;
 };
 
 class TopNLocalSinkState : public LocalSinkState {

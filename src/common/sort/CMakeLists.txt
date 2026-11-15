@@ -7,6 +7,7 @@ add_library_unity(
   partition_key_tracker.cpp
   partitioned_sort.cpp
   sort.cpp
+  sort_key_boundary.cpp
   sort_strategy.cpp
   sorted_run.cpp
   sorted_run_merger.cpp)

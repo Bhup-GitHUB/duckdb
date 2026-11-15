@@ -38,6 +38,9 @@ public:
 	void Initialize(Aggregates aggregates_p);
 	//! Initializes a TupleDataLayout with the specified ORDER BY to an empty TupleDataLayout
 	void Initialize(const vector<BoundOrderByNode> &orders, const LogicalType &type, bool has_payload);
+	static SortKeyType GetSortKeyType(const vector<BoundOrderByNode> &orders, const LogicalType &type,
+	                                  bool has_payload);
+	static idx_t GetSortKeyWidth(const vector<BoundOrderByNode> &orders);
 
 	//! Returns the number of data columns
 	inline idx_t ColumnCount() const {

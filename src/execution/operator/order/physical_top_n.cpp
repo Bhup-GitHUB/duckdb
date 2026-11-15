@@ -4,6 +4,7 @@
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/arena_containers/arena_vector.hpp"
+#include "duckdb/common/types/row/tuple_data_layout.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/storage/data_table.hpp"
@@ -16,7 +17,8 @@ PhysicalTopN::PhysicalTopN(PhysicalPlan &physical_plan, vector<LogicalType> type
                            idx_t estimated_cardinality, vector<idx_t> projections_p)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::TOP_N, std::move(types), estimated_cardinality),
       orders(std::move(orders)), limit(limit), offset(offset), dynamic_filter(std::move(dynamic_filter_p)),
-      projections(std::move(projections_p)) {
+      projections(std::move(projections_p)),
+      sort_key_type(TupleDataLayout::GetSortKeyType(this->orders, LogicalType::BLOB, true)) {
 }
 
 PhysicalTopN::~PhysicalTopN() {
@@ -25,17 +27,6 @@ PhysicalTopN::~PhysicalTopN() {
 //===--------------------------------------------------------------------===//
 // Heaps
 //===--------------------------------------------------------------------===//
-class TopNHeap;
-
-struct TopNEntry {
-	string_t sort_key;
-	idx_t index;
-
-	bool operator<(const TopNEntry &other) const {
-		return sort_key < other.sort_key;
-	}
-};
-
 struct TopNScanState {
 	TopNScanState() : pos(0), sel(STANDARD_VECTOR_SIZE) {
 	}
@@ -85,17 +76,10 @@ struct TopNBoundaryValue {
 
 class TopNHeap {
 public:
-	TopNHeap(ClientContext &context, const vector<LogicalType> &payload_types, const vector<BoundOrderByNode> &orders,
-	         idx_t limit, idx_t offset, const vector<idx_t> &projections);
-	TopNHeap(ExecutionContext &context, const vector<LogicalType> &payload_types,
-	         const vector<BoundOrderByNode> &orders, idx_t limit, idx_t offset, const vector<idx_t> &projections);
-	TopNHeap(ClientContext &context, Allocator &allocator, const vector<LogicalType> &payload_types,
-	         const vector<BoundOrderByNode> &orders, idx_t limit, idx_t offset, const vector<idx_t> &projections);
+	TopNHeap(ClientContext &context, const PhysicalTopN &op);
+	virtual ~TopNHeap() = default;
 
 	Allocator &allocator;
-	BufferManager &buffer_manager;
-	ArenaAllocator arena_allocator;
-	unsafe_arena_vector<TopNEntry> heap;
 	const vector<LogicalType> &payload_types;
 	const vector<BoundOrderByNode> &orders;
 	const vector<idx_t> &projections;
@@ -106,9 +90,7 @@ public:
 	ExpressionExecutor executor;
 	DataChunk sort_chunk;
 	DataChunk heap_data;
-	DataChunk payload_chunk;
 	DataChunk sort_keys;
-	StringHeap sort_key_heap;
 
 	SelectionVector matching_sel;
 
@@ -125,16 +107,21 @@ public:
 
 public:
 	void Sink(DataChunk &input, optional_ptr<TopNBoundaryValue> boundary_value = nullptr);
-	void Combine(TopNHeap &other);
-	void Reduce();
-	void Finalize();
+	virtual void Combine(TopNHeap &other) = 0;
+	virtual void Reduce() = 0;
+	virtual void Finalize() = 0;
+	virtual idx_t Count() const = 0;
 
-	void InitializeScan(TopNScanState &state, bool exclude_offset);
+	virtual void InitializeScan(TopNScanState &state, bool exclude_offset) = 0;
 	void Scan(TopNScanState &state, DataChunk &chunk, idx_t &pos);
 
 	bool CheckBoundaryValues(DataChunk &sort_chunk, DataChunk &payload, TopNBoundaryValue &boundary_val);
-	void AddSmallHeap(DataChunk &input, const Vector &sort_keys_vec);
-	void AddLargeHeap(DataChunk &input, const Vector &sort_keys_vec);
+
+	template <class TARGET>
+	TARGET &Cast() {
+		DynamicCastCheck<TARGET>(this);
+		return reinterpret_cast<TARGET &>(*this);
+	}
 
 public:
 	idx_t ReduceThreshold() const {
@@ -145,8 +132,102 @@ public:
 		return MinValue<idx_t>(STANDARD_VECTOR_SIZE * 100ULL, ReduceThreshold()) + STANDARD_VECTOR_SIZE;
 	}
 
+protected:
+	virtual void AddRows(DataChunk &input) = 0;
+	virtual void PublishBoundary(TopNBoundaryValue &boundary) = 0;
+};
+
+template <SortKeyType SORT_KEY_TYPE>
+class TopNKeyHeap final : public TopNHeap {
+	using SORT_KEY = SortKey<SORT_KEY_TYPE>;
+	static_assert(SORT_KEY::HAS_PAYLOAD, "Top-N keys carry their row as payload");
+
+public:
+	TopNKeyHeap(ClientContext &context, const PhysicalTopN &op)
+	    : TopNHeap(context, op), arena_allocator(allocator), heap(arena_allocator), sort_key_heap(allocator) {
+		heap.reserve(InitialHeapAllocSize());
+		if (SORT_KEY::CONSTANT_SIZE) {
+			row_keys = make_unsafe_uniq_array_uninitialized<SORT_KEY>(STANDARD_VECTOR_SIZE);
+			row_targets = make_unsafe_uniq_array_uninitialized<data_ptr_t>(STANDARD_VECTOR_SIZE);
+		}
+	}
+
+	void Combine(TopNHeap &other_p) override;
+	void Reduce() override;
+	void Finalize() override;
+	void InitializeScan(TopNScanState &state, bool exclude_offset) override;
+
+	idx_t Count() const override {
+		return heap.size();
+	}
+
 private:
-	inline bool EntryShouldBeAdded(const string_t &sort_key) {
+	void AddRows(DataChunk &input) override;
+	void PublishBoundary(TopNBoundaryValue &boundary) override;
+
+	void AddSmallHeap(DataChunk &input);
+	void AddLargeHeap(DataChunk &input);
+
+	static idx_t GetRow(const SORT_KEY &entry) {
+		return entry.payload.u.pad;
+	}
+
+	static void SetRow(SORT_KEY &entry, idx_t row) {
+		entry.payload.u.pad = row;
+	}
+
+	void EncodeRows() {
+		if constexpr (SORT_KEY::CONSTANT_SIZE) {
+			const auto count = sort_chunk.size();
+			for (idx_t r = 0; r < count; r++) {
+				row_keys[r] = SORT_KEY();
+				row_targets[r] = data_ptr_cast(&row_keys[r].part0);
+			}
+			CreateSortKeyHelpers::CreateSortKey(sort_chunk, modifiers, row_targets.get());
+			for (idx_t r = 0; r < count; r++) {
+				row_keys[r].ByteSwap();
+			}
+		} else {
+			sort_keys.Reset();
+			CreateSortKeyHelpers::CreateSortKey(sort_chunk, modifiers, sort_keys.data[0]);
+		}
+	}
+
+	SORT_KEY RowKey(idx_t r) {
+		if constexpr (SORT_KEY::CONSTANT_SIZE) {
+			return row_keys[r];
+		} else {
+			SORT_KEY key;
+			key.Construct(FlatVector::GetDataMutable<string_t>(sort_keys.data[0])[r]);
+			return key;
+		}
+	}
+
+	static void CopyKey(SORT_KEY &entry, StringHeap &target) {
+		if constexpr (!SORT_KEY::CONSTANT_SIZE) {
+			const auto size = entry.GetHeapSize();
+			if (size == 0) {
+				return;
+			}
+			auto copy = target.GetAllocator().Allocate(size);
+			memcpy(copy, entry.GetData(), size);
+			entry.SetData(copy);
+		}
+	}
+
+	string_t KeyBytes(const SORT_KEY &entry) {
+		if constexpr (!SORT_KEY::CONSTANT_SIZE) {
+			if (entry.GetHeapSize() != 0) {
+				return string_t(const_char_ptr_cast(entry.GetData()), UnsafeNumericCast<uint32_t>(entry.GetHeapSize()));
+			}
+		}
+		for (idx_t i = 0; i < SORT_KEY::PARTS; i++) {
+			Store<uint64_t>(BSwapIfLE((&entry.part0)[i]), key_bytes + i * sizeof(uint64_t));
+		}
+		return string_t(const_char_ptr_cast(key_bytes), UnsafeNumericCast<uint32_t>(SORT_KEY::INLINE_LENGTH));
+	}
+
+	inline bool EntryShouldBeAdded(const SORT_KEY &sort_key) {
 		if (heap_size == 0) {
 			// the heap has no capacity (LIMIT 0) - no entry can ever be added
 			return false;
@@ -155,7 +236,7 @@ private:
 			// heap is not full yet - the entry can be added
 			return true;
 		}
-		if (sort_key < heap.front().sort_key) {
+		if (sort_key < heap.front()) {
 			// sort key is smaller than current max value
 			return true;
 		}
@@ -163,7 +244,7 @@ private:
 		return false;
 	}
 
-	inline void AddEntryToHeap(const TopNEntry &entry) {
+	inline void AddEntryToHeap(const SORT_KEY &entry) {
 		D_ASSERT(heap_size > 0);
 		if (heap.size() >= heap_size) {
 			D_ASSERT(!heap.empty());
@@ -173,19 +254,24 @@ private:
 		heap.push_back(entry);
 		std::push_heap(heap.begin(), heap.end());
 	}
+
+private:
+	ArenaAllocator arena_allocator;
+	unsafe_arena_vector<SORT_KEY> heap;
+	StringHeap sort_key_heap;
+	unsafe_unique_array<SORT_KEY> row_keys;
+	unsafe_unique_array<data_ptr_t> row_targets;
+	data_t key_bytes[SORT_KEY::PARTS * sizeof(uint64_t)];
 };
 
 //===--------------------------------------------------------------------===//
 // TopNHeap
 //===--------------------------------------------------------------------===//
-TopNHeap::TopNHeap(ClientContext &context, Allocator &allocator, const vector<LogicalType> &payload_types_p,
-                   const vector<BoundOrderByNode> &orders_p, idx_t limit, idx_t offset,
-                   const vector<idx_t> &projections_p)
-    : allocator(allocator), buffer_manager(BufferManager::GetBufferManager(context)), arena_allocator(allocator),
-      heap(arena_allocator), payload_types(payload_types_p), orders(orders_p), projections(projections_p), limit(limit),
-      offset(offset), heap_size(limit + offset), executor(context), sort_key_heap(allocator),
-      matching_sel(STANDARD_VECTOR_SIZE), final_sel(STANDARD_VECTOR_SIZE), true_sel(STANDARD_VECTOR_SIZE),
-      false_sel(STANDARD_VECTOR_SIZE), new_remaining_sel(STANDARD_VECTOR_SIZE) {
+TopNHeap::TopNHeap(ClientContext &context, const PhysicalTopN &op)
+    : allocator(BufferAllocator::Get(context)), payload_types(op.children[0].get().types), orders(op.orders),
+      projections(op.projections), limit(op.limit), offset(op.offset), heap_size(op.limit + op.offset),
+      executor(context), matching_sel(STANDARD_VECTOR_SIZE), final_sel(STANDARD_VECTOR_SIZE),
+      true_sel(STANDARD_VECTOR_SIZE), false_sel(STANDARD_VECTOR_SIZE), new_remaining_sel(STANDARD_VECTOR_SIZE) {
 	// initialize the executor and the sort_chunk
 	vector<LogicalType> sort_types;
 	for (auto &order : orders) {
@@ -194,42 +280,58 @@ TopNHeap::TopNHeap(ClientContext &context, Allocator &allocator, const vector<Lo
 		executor.AddExpression(*expr);
 		modifiers.emplace_back(order.type, order.null_order);
 	}
-	heap.reserve(InitialHeapAllocSize());
 	vector<LogicalType> sort_keys_type {LogicalType::BLOB};
 	sort_keys.Initialize(allocator, sort_keys_type);
 	heap_data.Initialize(allocator, payload_types, InitialHeapAllocSize());
-	payload_chunk.Initialize(allocator, payload_types);
 	sort_chunk.Initialize(allocator, sort_types);
 	compare_chunk.Initialize(allocator, sort_types);
 	boundary_values.Initialize(allocator, sort_types);
 }
 
-TopNHeap::TopNHeap(ClientContext &context, const vector<LogicalType> &payload_types,
-                   const vector<BoundOrderByNode> &orders, idx_t limit, idx_t offset, const vector<idx_t> &projections)
-    : TopNHeap(context, BufferAllocator::Get(context), payload_types, orders, limit, offset, projections) {
+static unique_ptr<TopNHeap> CreateTopNHeap(ClientContext &context, const PhysicalTopN &op) {
+	switch (op.sort_key_type) {
+#define DUCKDB_SORT_KEY_CASE(SORT_KEY_TYPE)                                                                            \
+	case SortKeyType::SORT_KEY_TYPE:                                                                                   \
+		return make_uniq<TopNKeyHeap<SortKeyType::SORT_KEY_TYPE>>(context, op);
+		DUCKDB_FOR_EACH_PAYLOAD_SORT_KEY_TYPE(DUCKDB_SORT_KEY_CASE)
+#undef DUCKDB_SORT_KEY_CASE
+	default:
+		throw NotImplementedException("Top-N heap for %s", EnumUtil::ToString(op.sort_key_type));
+	}
 }
 
-TopNHeap::TopNHeap(ExecutionContext &context, const vector<LogicalType> &payload_types,
-                   const vector<BoundOrderByNode> &orders, idx_t limit, idx_t offset, const vector<idx_t> &projections)
-    : TopNHeap(context.client, BufferAllocator::Get(context.client), payload_types, orders, limit, offset,
-               projections) {
+template <SortKeyType SORT_KEY_TYPE>
+void TopNKeyHeap<SORT_KEY_TYPE>::AddRows(DataChunk &input) {
+	static constexpr idx_t SMALL_HEAP_THRESHOLD = 100;
+	EncodeRows();
+	if (heap_size <= SMALL_HEAP_THRESHOLD) {
+		AddSmallHeap(input);
+	} else {
+		AddLargeHeap(input);
+	}
 }
 
-void TopNHeap::AddSmallHeap(DataChunk &input, const Vector &sort_keys_vec) {
+template <SortKeyType SORT_KEY_TYPE>
+void TopNKeyHeap<SORT_KEY_TYPE>::PublishBoundary(TopNBoundaryValue &boundary) {
+	// note that the global boundary only applies to FULL heaps
+	if (!heap.empty() && heap.size() >= heap_size) {
+		boundary.UpdateValue(KeyBytes(heap.front()));
+	}
+}
+
+template <SortKeyType SORT_KEY_TYPE>
+void TopNKeyHeap<SORT_KEY_TYPE>::AddSmallHeap(DataChunk &input) {
 	// insert the sort keys into the priority queue
 	constexpr idx_t BASE_INDEX = NumericLimits<uint32_t>::Maximum();
 
 	bool any_added = false;
-	auto sort_key_values = FlatVector::GetData<string_t>(sort_keys_vec);
 	for (idx_t r = 0; r < input.size(); r++) {
-		auto &sort_key = sort_key_values[r];
-		if (!EntryShouldBeAdded(sort_key)) {
+		auto entry = RowKey(r);
+		if (!EntryShouldBeAdded(entry)) {
 			continue;
 		}
 		// replace the previous top entry with the new entry
-		TopNEntry entry;
-		entry.sort_key = sort_key;
-		entry.index = BASE_INDEX + r;
+		SetRow(entry, BASE_INDEX + r);
 		AddEntryToHeap(entry);
 		any_added = true;
 	}
@@ -241,15 +343,14 @@ void TopNHeap::AddSmallHeap(DataChunk &input, const Vector &sort_keys_vec) {
 	// for all matching entries we need to copy over the corresponding payload values
 	idx_t match_count = 0;
 	for (auto &entry : heap) {
-		if (entry.index < BASE_INDEX) {
+		if (GetRow(entry) < BASE_INDEX) {
 			continue;
 		}
 		// this entry was added in this chunk
-		// copy over the string to the string heap
-		entry.sort_key = sort_key_heap.AddBlob(entry.sort_key);
+		CopyKey(entry, sort_key_heap);
 		// to finalize the addition of this entry we need to move over the payload data
-		matching_sel.set_index(match_count, entry.index - BASE_INDEX);
-		entry.index = heap_data.size() + match_count;
+		matching_sel.set_index(match_count, GetRow(entry) - BASE_INDEX);
+		SetRow(entry, heap_data.size() + match_count);
 		match_count++;
 	}
 
@@ -257,19 +358,18 @@ void TopNHeap::AddSmallHeap(DataChunk &input, const Vector &sort_keys_vec) {
 	heap_data.Append(input, matching_sel, match_count, VectorAppendMode::ALLOW_RESIZE);
 }
 
-void TopNHeap::AddLargeHeap(DataChunk &input, const Vector &sort_keys_vec) {
-	auto sort_key_values = FlatVector::GetData<string_t>(sort_keys_vec);
+template <SortKeyType SORT_KEY_TYPE>
+void TopNKeyHeap<SORT_KEY_TYPE>::AddLargeHeap(DataChunk &input) {
 	idx_t base_index = heap_data.size();
 	idx_t match_count = 0;
 	for (idx_t r = 0; r < input.size(); r++) {
-		auto &sort_key = sort_key_values[r];
-		if (!EntryShouldBeAdded(sort_key)) {
+		auto entry = RowKey(r);
+		if (!EntryShouldBeAdded(entry)) {
 			continue;
 		}
 		// replace the previous top entry with the new entry
-		TopNEntry entry;
-		entry.sort_key = sort_key_heap.AddBlob(sort_key);
-		entry.index = base_index + match_count;
+		CopyKey(entry, sort_key_heap);
+		SetRow(entry, base_index + match_count);
 		AddEntryToHeap(entry);
 		matching_sel.set_index(match_count++, r);
 	}
@@ -360,8 +460,6 @@ bool TopNHeap::CheckBoundaryValues(DataChunk &sort_chunk, DataChunk &payload, To
 }
 
 void TopNHeap::Sink(DataChunk &input, optional_ptr<TopNBoundaryValue> global_boundary) {
-	static constexpr idx_t SMALL_HEAP_THRESHOLD = 100;
-
 	if (heap_size == 0) {
 		// LIMIT 0 without OFFSET - the heap can never hold any entry, so there is nothing to do
 		return;
@@ -379,42 +477,33 @@ void TopNHeap::Sink(DataChunk &input, optional_ptr<TopNBoundaryValue> global_bou
 		}
 	}
 
-	// construct the sort key from the sort chunk
-	sort_keys.Reset();
-	auto &sort_keys_vec = sort_keys.data[0];
-	CreateSortKeyHelpers::CreateSortKey(sort_chunk, modifiers, sort_keys_vec);
-
-	if (heap_size <= SMALL_HEAP_THRESHOLD) {
-		AddSmallHeap(input, sort_keys_vec);
-	} else {
-		AddLargeHeap(input, sort_keys_vec);
-	}
+	AddRows(input);
 
 	// if we modified the heap we might be able to update the global boundary
-	// note that the global boundary only applies to FULL heaps
-	if (!heap.empty() && heap.size() >= heap_size && global_boundary) {
-		global_boundary->UpdateValue(heap.front().sort_key);
+	if (global_boundary) {
+		PublishBoundary(*global_boundary);
 	}
 }
 
-void TopNHeap::Combine(TopNHeap &other) {
+template <SortKeyType SORT_KEY_TYPE>
+void TopNKeyHeap<SORT_KEY_TYPE>::Combine(TopNHeap &other_p) {
+	auto &other = other_p.Cast<TopNKeyHeap>();
 	// "other" is sorted at this point
 	idx_t match_count = 0;
 	// merge the heap of other into this
 	for (idx_t i = 0; i < other.heap.size(); i++) {
 		// heap is full - check the latest entry
-		auto &other_entry = other.heap[i];
-		auto &sort_key = other_entry.sort_key;
-		if (!EntryShouldBeAdded(sort_key)) {
+		auto new_entry = other.heap[i];
+		if (!EntryShouldBeAdded(new_entry)) {
 			break; // We can break out of the loop here since we sorted the heap
 		}
 		// add this entry
-		TopNEntry new_entry;
-		new_entry.sort_key = sort_key_heap.AddBlob(sort_key);
-		new_entry.index = heap_data.size() + match_count;
+		CopyKey(new_entry, sort_key_heap);
+		matching_sel.set_index(match_count, GetRow(new_entry));
+		SetRow(new_entry, heap_data.size() + match_count);
 		AddEntryToHeap(new_entry);
 
-		matching_sel.set_index(match_count++, other_entry.index);
+		match_count++;
 		if (match_count >= STANDARD_VECTOR_SIZE) {
 			// flush
 			heap_data.Append(other.heap_data, matching_sel, match_count, VectorAppendMode::ALLOW_RESIZE);
@@ -429,17 +518,19 @@ void TopNHeap::Combine(TopNHeap &other) {
 	Reduce();
 }
 
-void TopNHeap::Finalize() {
+template <SortKeyType SORT_KEY_TYPE>
+void TopNKeyHeap<SORT_KEY_TYPE>::Finalize() {
 	std::sort(heap.begin(), heap.end());
 }
 
-void TopNHeap::Reduce() {
+template <SortKeyType SORT_KEY_TYPE>
+void TopNKeyHeap<SORT_KEY_TYPE>::Reduce() {
 	if (heap_data.size() < ReduceThreshold()) {
 		// only reduce when we pass the reduce threshold
 		return;
 	}
 	// we have too many values in the heap - reduce them
-	StringHeap new_sort_heap;
+	StringHeap new_sort_heap(allocator);
 	DataChunk new_heap_data;
 	new_heap_data.Initialize(allocator, payload_types, heap.size());
 
@@ -447,10 +538,10 @@ void TopNHeap::Reduce() {
 	for (idx_t i = 0; i < heap.size(); i++) {
 		auto &entry = heap[i];
 		// move the sort key to the new sort heap
-		entry.sort_key = new_sort_heap.AddBlob(entry.sort_key);
+		CopyKey(entry, new_sort_heap);
 		// move this heap entry to position X in the payload chunk
-		new_payload_sel.set_index(i, entry.index);
-		entry.index = i;
+		new_payload_sel.set_index(i, GetRow(entry));
+		SetRow(entry, i);
 	}
 
 	// copy over the data from the current payload chunk to the new payload chunk
@@ -462,14 +553,13 @@ void TopNHeap::Reduce() {
 	heap_data.Reference(new_heap_data);
 }
 
-void TopNHeap::InitializeScan(TopNScanState &state, bool exclude_offset) {
-	auto heap_copy = heap;
-	state.scan_order.resize(heap_copy.size());
-
+template <SortKeyType SORT_KEY_TYPE>
+void TopNKeyHeap<SORT_KEY_TYPE>::InitializeScan(TopNScanState &state, bool exclude_offset) {
 	// we sorted the heap in Finalize(), so we can sequentially here
 	// we do this because sorting the heap is much more efficient than popping one by one
-	for (idx_t i = 0; i < heap_copy.size(); i++) {
-		state.scan_order[i] = UnsafeNumericCast<sel_t>(heap_copy[i].index);
+	state.scan_order.resize(heap.size());
+	for (idx_t i = 0; i < heap.size(); i++) {
+		state.scan_order[i] = UnsafeNumericCast<sel_t>(GetRow(heap[i]));
 	}
 
 	state.pos = exclude_offset ? offset : 0;
@@ -495,28 +585,24 @@ void TopNHeap::Scan(TopNScanState &state, DataChunk &chunk, idx_t &pos) {
 class TopNGlobalSinkState : public GlobalSinkState {
 public:
 	TopNGlobalSinkState(ClientContext &context, const PhysicalTopN &op)
-	    : heap(context, op.children[0].get().types, op.orders, op.limit, op.offset, op.projections),
-	      boundary_value(op) {
+	    : heap(CreateTopNHeap(context, op)), boundary_value(op) {
 	}
 
 	mutex lock;
-	TopNHeap heap;
+	unique_ptr<TopNHeap> heap;
 	TopNBoundaryValue boundary_value;
 };
 
 class TopNLocalSinkState : public LocalSinkState {
 public:
-	TopNLocalSinkState(ExecutionContext &context, const vector<LogicalType> &payload_types,
-	                   const vector<BoundOrderByNode> &orders, idx_t limit, idx_t offset,
-	                   const vector<idx_t> &projections)
-	    : heap(context, payload_types, orders, limit, offset, projections) {
+	TopNLocalSinkState(ExecutionContext &context, const PhysicalTopN &op) : heap(CreateTopNHeap(context.client, op)) {
 	}
 
-	TopNHeap heap;
+	unique_ptr<TopNHeap> heap;
 };
 
 unique_ptr<LocalSinkState> PhysicalTopN::GetLocalSinkState(ExecutionContext &context) const {
-	return make_uniq<TopNLocalSinkState>(context, children[0].get().types, orders, limit, offset, projections);
+	return make_uniq<TopNLocalSinkState>(context, *this);
 }
 
 unique_ptr<GlobalSinkState> PhysicalTopN::GetGlobalSinkState(ClientContext &context) const {
@@ -533,8 +619,8 @@ SinkResultType PhysicalTopN::Sink(ExecutionContext &context, DataChunk &chunk, O
 	// append to the local sink state
 	auto &gstate = input.global_state.Cast<TopNGlobalSinkState>();
 	auto &sink = input.local_state.Cast<TopNLocalSinkState>();
-	sink.heap.Sink(chunk, &gstate.boundary_value);
-	sink.heap.Reduce();
+	sink.heap->Sink(chunk, &gstate.boundary_value);
+	sink.heap->Reduce();
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
@@ -546,9 +632,9 @@ SinkCombineResultType PhysicalTopN::Combine(ExecutionContext &context, OperatorS
 	auto &lstate = input.local_state.Cast<TopNLocalSinkState>();
 
 	// scan the local top N and append it to the global heap
-	lstate.heap.Finalize();
+	lstate.heap->Finalize();
 	lock_guard<mutex> guard(gstate.lock);
-	gstate.heap.Combine(lstate.heap);
+	gstate.heap->Combine(*lstate.heap);
 
 	return SinkCombineResultType::FINISHED;
 }
@@ -560,7 +646,7 @@ SinkFinalizeType PhysicalTopN::Finalize(Pipeline &pipeline, Event &event, Client
                                         OperatorSinkFinalizeInput &input) const {
 	auto &gstate = input.global_state.Cast<TopNGlobalSinkState>();
 	// global finalize: compute the final top N
-	gstate.heap.Finalize();
+	gstate.heap->Finalize();
 	return SinkFinalizeType::READY;
 }
 
@@ -577,12 +663,12 @@ public:
 class TopNGlobalSourceState : public GlobalSourceState {
 public:
 	explicit TopNGlobalSourceState(TopNGlobalSinkState &sink_p) : sink(sink_p), batch_index(0) {
-		sink.heap.InitializeScan(state, true);
-		total_rows = state.scan_order.size() - MinValue<idx_t>(sink.heap.offset, state.scan_order.size());
+		sink.heap->InitializeScan(state, true);
+		total_rows = state.scan_order.size() - MinValue<idx_t>(sink.heap->offset, state.scan_order.size());
 	}
 
 	idx_t MaxThreads() override {
-		return MaxValue<idx_t>(sink.heap.heap.size() / TUPLES_PER_BATCH, 1);
+		return MaxValue<idx_t>(sink.heap->Count() / TUPLES_PER_BATCH, 1);
 	}
 
 public:
@@ -631,7 +717,7 @@ SourceResultType PhysicalTopN::GetDataInternal(ExecutionContext &context, DataCh
 		lstate.batch_index = gstate.batch_index++;
 	}
 
-	sink.heap.Scan(gstate.state, chunk, lstate.pos);
+	sink.heap->Scan(gstate.state, chunk, lstate.pos);
 	gstate.rows_scanned.fetch_add(chunk.size(), std::memory_order_relaxed);
 
 	return chunk.size() == 0 ? SourceResultType::FINISHED : SourceResultType::HAVE_MORE_OUTPUT;

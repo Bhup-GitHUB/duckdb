@@ -165,75 +165,95 @@ void TupleDataLayout::Initialize(const vector<BoundOrderByNode> &orders, const L
 	// Type is determined by "create_sort_key", if it is <= 8 we get a bigint
 	types.push_back(type);
 
-	// Compute row width
-	sort_width = 0;
-	bool all_valid_and_truly_constant = true;
-	for (idx_t order_idx = 0; order_idx < orders.size(); order_idx++) {
-		const auto &order = orders[order_idx];
+	sort_width = GetSortKeyWidth(orders);
+	idx_t skippable_width = 0;
+	for (const auto &order : orders) {
+		const auto physical_type = order.expression->GetReturnType().InternalType();
+		if (!order.stats || order.stats->CanHaveNull() || !TypeIsConstantSize(physical_type) || skippable_width >= 7) {
+			break;
+		}
+		// We don't have to sort by this byte, all values are valid
+		sort_skippable_bytes.emplace_back(skippable_width);
+		skippable_width += 1 + GetTypeIdSize(physical_type);
+	}
+
+	sort_key_type = GetSortKeyType(orders, type, has_payload);
+	switch (sort_key_type) {
+	case SortKeyType::NO_PAYLOAD_FIXED_8:
+		row_width = 8;
+		break;
+	case SortKeyType::NO_PAYLOAD_FIXED_16:
+	case SortKeyType::PAYLOAD_FIXED_16:
+		row_width = 16;
+		break;
+	case SortKeyType::NO_PAYLOAD_FIXED_24:
+	case SortKeyType::PAYLOAD_FIXED_24:
+		row_width = 24;
+		break;
+	default:
+		row_width = 32;
+		break;
+	}
+	if (!SortKeyUtils::IsConstantSize(sort_key_type)) {
+		all_constant = false;
+		heap_size_offset = has_payload ? SortKey<SortKeyType::PAYLOAD_VARIABLE_32>::HEAP_SIZE_OFFSET
+		                               : SortKey<SortKeyType::NO_PAYLOAD_VARIABLE_32>::HEAP_SIZE_OFFSET;
+	}
+}
+
+idx_t TupleDataLayout::GetSortKeyWidth(const vector<BoundOrderByNode> &orders) {
+	idx_t width = 0;
+	for (const auto &order : orders) {
 		const auto &logical_type = order.expression->GetReturnType();
 		const auto physical_type = logical_type.InternalType();
-
-		if (all_valid_and_truly_constant && order.stats && !order.stats->CanHaveNull() &&
-		    TypeIsConstantSize(physical_type) && sort_width < 7) {
-			// We don't have to sort by this byte, all values are valid
-			sort_skippable_bytes.emplace_back(sort_width);
-		} else {
-			all_valid_and_truly_constant = false;
-		}
-
 		if (TypeIsConstantSize(physical_type)) {
 			// NULL byte + fixed-width type
-			sort_width += 1 + GetTypeIdSize(physical_type);
+			width += 1 + GetTypeIdSize(physical_type);
 		} else if (logical_type == LogicalType::VARCHAR && order.stats &&
 		           StringStats::HasMaxStringLength(*order.stats)) {
 			// NULL byte + maximum string length + string delimiter
-			sort_width += 1 + StringStats::MaxStringLength(*order.stats) + 1;
+			width += 1 + StringStats::MaxStringLength(*order.stats) + 1;
 		} else {
 			// We don't know how long the key will be
-			sort_width = DConstants::INVALID_INDEX;
-			break;
+			return DConstants::INVALID_INDEX;
 		}
 	}
+	return width;
+}
 
-	// Set row width and sort key type accordingly
-	idx_t temp_row_width = type.id() == LogicalTypeId::BIGINT ? 8 : sort_width;
+SortKeyType TupleDataLayout::GetSortKeyType(const vector<BoundOrderByNode> &orders, const LogicalType &type,
+                                            bool has_payload) {
+	const auto sort_width = GetSortKeyWidth(orders);
+	idx_t row_width = type.id() == LogicalTypeId::BIGINT ? 8 : sort_width;
 	if (sort_width != DConstants::INVALID_INDEX && has_payload) {
-		temp_row_width += 8;
+		row_width += 8;
 	}
 #if DUCKDB_SMALLER_BINARY(sort_key_layouts)
 	// Round the key up to the nearest layout that DUCKDB_FOR_EACH_SORT_KEY_TYPE still keeps. A key
 	// without payload widens to the 32-byte one rather than falling back to the variable-size key,
 	// which would cost far more than the wider row: a variable-size key compares through the heap.
 	if (has_payload) {
-		if (temp_row_width > 24) {
-			temp_row_width = DConstants::INVALID_INDEX;
+		if (row_width > 24) {
+			row_width = DConstants::INVALID_INDEX;
 		}
-	} else if (temp_row_width > 8 && temp_row_width <= 32) {
-		temp_row_width = 32;
+	} else if (row_width > 8 && row_width <= 32) {
+		row_width = 32;
 	}
 #endif
-	if (temp_row_width <= 8) {
+	if (row_width <= 8) {
 		D_ASSERT(!has_payload);
-		row_width = 8;
-		sort_key_type = SortKeyType::NO_PAYLOAD_FIXED_8;
-	} else if (temp_row_width <= 16) {
-		row_width = 16;
-		sort_key_type = has_payload ? SortKeyType::PAYLOAD_FIXED_16 : SortKeyType::NO_PAYLOAD_FIXED_16;
-	} else if (temp_row_width <= 24) {
-		row_width = 24;
-		sort_key_type = has_payload ? SortKeyType::PAYLOAD_FIXED_24 : SortKeyType::NO_PAYLOAD_FIXED_24;
-	} else if (temp_row_width <= 32) {
-		row_width = 32;
-		sort_key_type = has_payload ? SortKeyType::PAYLOAD_FIXED_32 : SortKeyType::NO_PAYLOAD_FIXED_32;
-	} else {
-		row_width = 32;
-		sort_key_type = has_payload ? SortKeyType::PAYLOAD_VARIABLE_32 : SortKeyType::NO_PAYLOAD_VARIABLE_32;
-
-		// Variable-size sort key, also set these properties
-		all_constant = false;
-		heap_size_offset = has_payload ? SortKey<SortKeyType::PAYLOAD_VARIABLE_32>::HEAP_SIZE_OFFSET
-		                               : SortKey<SortKeyType::NO_PAYLOAD_VARIABLE_32>::HEAP_SIZE_OFFSET;
+		return SortKeyType::NO_PAYLOAD_FIXED_8;
 	}
+	if (row_width <= 16) {
+		return has_payload ? SortKeyType::PAYLOAD_FIXED_16 : SortKeyType::NO_PAYLOAD_FIXED_16;
+	}
+	if (row_width <= 24) {
+		return has_payload ? SortKeyType::PAYLOAD_FIXED_24 : SortKeyType::NO_PAYLOAD_FIXED_24;
+	}
+	if (row_width <= 32) {
+		return has_payload ? SortKeyType::PAYLOAD_FIXED_32 : SortKeyType::NO_PAYLOAD_FIXED_32;
+	}
+	return has_payload ? SortKeyType::PAYLOAD_VARIABLE_32 : SortKeyType::NO_PAYLOAD_VARIABLE_32;
 }
 
 bool TupleDataLayout::IsSortKeyLayout() const {

@@ -49,6 +49,7 @@ struct OrderModifiers {
 
 struct CreateSortKeyHelpers {
 	static void CreateSortKey(DataChunk &input, const vector<OrderModifiers> &modifiers, Vector &result);
+	static void CreateSortKey(DataChunk &input, const vector<OrderModifiers> &modifiers, data_ptr_t *targets);
 	static void CreateSortKey(const Vector &input, OrderModifiers modifiers, Vector &result);
 	static void CreateSortKey(const Vector &input, idx_t count, OrderModifiers modifiers, Vector &result);
 	static bool IsNullSortKey(const_data_ptr_t data, OrderByNullType null_order);

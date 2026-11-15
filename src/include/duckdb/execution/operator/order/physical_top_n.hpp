@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/sorting/sort_key.hpp"
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/planner/bound_query_node.hpp"
 
@@ -32,6 +33,7 @@ public:
 	//! Dynamic table filter (if any)
 	shared_ptr<DynamicFilterData> dynamic_filter;
 	vector<idx_t> projections;
+	SortKeyType sort_key_type;
 
 public:
 	// Source interface

@@ -243,22 +243,20 @@ public:
 
 	void Construct(const string_t &val, data_ptr_t &heap_ptr) {
 		auto &sort_key = static_cast<SORT_KEY &>(*this);
-		// Initialize to 0's (including size by doing + 1)
-		for (idx_t i = 0; i < SORT_KEY::PARTS + 1; i++) {
-			(&sort_key.part0)[i] = 0;
-		}
-
-		// Deal with inlined part first
-		memcpy(&sort_key.part0, val.GetData(), MinValue(val.GetSize(), SORT_KEY::INLINE_LENGTH));
-		// Same as FixedSortKey, we do not store the data in byte-comparable order
-		ByteSwap();
-
+		ConstructInlined(val);
 		// Deal with non-inlined part (if necessary)
-		if (val.GetSize() > SORT_KEY::INLINE_LENGTH) {
-			sort_key.size = val.GetSize();
+		if (sort_key.size != 0) {
 			sort_key.data.u.ptr = heap_ptr;
 			memcpy(sort_key.data.u.ptr, val.GetData(), sort_key.size);
 			heap_ptr += sort_key.size;
+		}
+	}
+
+	void Construct(string_t &val) {
+		auto &sort_key = static_cast<SORT_KEY &>(*this);
+		ConstructInlined(val);
+		if (sort_key.size != 0) {
+			sort_key.data.u.ptr = data_ptr_cast(val.GetDataWriteable());
 		}
 	}
 
@@ -330,6 +328,21 @@ public:
 		// Both strings are non-inlined
 		comp_res = memcmp(lhs.data.u.ptr, rhs.data.u.ptr, MinValue(lhs.size, rhs.size));
 		return comp_res < 0 || (comp_res == 0 && lhs.size < rhs.size);
+	}
+
+private:
+	void ConstructInlined(const string_t &val) {
+		auto &sort_key = static_cast<SORT_KEY &>(*this);
+		// Initialize to 0's (including size by doing + 1)
+		for (idx_t i = 0; i < SORT_KEY::PARTS + 1; i++) {
+			(&sort_key.part0)[i] = 0;
+		}
+		memcpy(&sort_key.part0, val.GetData(), MinValue(val.GetSize(), SORT_KEY::INLINE_LENGTH));
+		// Same as FixedSortKey, we do not store the data in byte-comparable order
+		ByteSwap();
+		if (val.GetSize() > SORT_KEY::INLINE_LENGTH) {
+			sort_key.size = val.GetSize();
+		}
 	}
 };
 

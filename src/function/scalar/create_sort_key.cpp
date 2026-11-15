@@ -955,6 +955,18 @@ static void AssertSortKeyRoundTrip(vector<unique_ptr<SortKeyVectorData>> &sort_k
 
 } // namespace
 
+void CreateSortKeyHelpers::CreateSortKey(DataChunk &input, const vector<OrderModifiers> &modifiers,
+                                         data_ptr_t *targets) {
+	D_ASSERT(modifiers.size() == input.ColumnCount());
+	unsafe_vector<idx_t> offsets;
+	offsets.resize(input.size(), 0);
+	for (idx_t c = 0; c < modifiers.size(); c++) {
+		SortKeyVectorData vector_data(input.data[c], input.size(), modifiers[c]);
+		SortKeyConstructInfo info(modifiers[c], offsets, targets);
+		ConstructSortKey(vector_data, info);
+	}
+}
+
 void CreateSortKeyHelpers::CreateSortKey(const Vector &input, OrderModifiers order_modifier, Vector &result) {
 	// prepare the sort key data
 	const auto input_count = input.size();

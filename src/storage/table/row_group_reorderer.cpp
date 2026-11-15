@@ -8,6 +8,9 @@ namespace duckdb {
 
 namespace {
 
+constexpr idx_t STRING_PREFIX_SIZE = StringStatsData::CURRENT_MAX_STRING_MINMAX_SIZE;
+static_assert(1 + STRING_PREFIX_SIZE + 1 <= sizeof(RowGroupOrderKey));
+
 template <class T>
 bool EncodeNumeric(const BaseStatistics &stats, bool min, OrderModifiers modifiers, data_ptr_t key) {
 	if (!NumericStats::HasMinMax(stats)) {
@@ -26,7 +29,7 @@ bool EncodeString(const BaseStatistics &stats, bool min, OrderModifiers modifier
 		return false;
 	}
 	const auto value = min ? StringStats::GetMinUnsafe(stats) : StringStats::GetMaxUnsafe(stats);
-	const string_t prefix(value.data(), UnsafeNumericCast<uint32_t>(value.size()));
+	const string_t prefix(value.data(), UnsafeNumericCast<uint32_t>(MinValue<idx_t>(value.size(), STRING_PREFIX_SIZE)));
 	CreateSortKeyHelpers::CreateSortKey(stats.GetType(), const_data_ptr_cast(&prefix), modifiers, key);
 	return true;
 }

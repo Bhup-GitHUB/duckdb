@@ -15,6 +15,7 @@
 #include "duckdb/function/aggregate/list_aggregate.hpp"
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/planner/expression.hpp"
+#include "duckdb/planner/expression_binder.hpp"
 
 #include <cmath>
 
@@ -260,6 +261,56 @@ static void QuantileSortKeyUpdate(Vector inputs[], AggregateInputData &aggr_inpu
 	ListUpdateFunction<true>(&sort_keys, aggr_input_data, 1, states, count);
 }
 
+static void QuantileCollatedSortKeyUpdate(Vector inputs[], AggregateInputData &aggr_input_data, idx_t input_count,
+                                          Vector &states, idx_t count) {
+	D_ASSERT(input_count >= 2);
+	static const vector<OrderModifiers> modifiers(2, OrderModifiers(OrderType::ASCENDING, OrderByNullType::NULLS_LAST));
+	auto &value = inputs[0];
+	auto &key = inputs[input_count - 1];
+	DataChunk pair;
+	pair.InitializeEmpty(vector<LogicalType> {key.GetType(), value.GetType()});
+	pair.data[0].Reference(key);
+	pair.data[1].Reference(value);
+	pair.SetChildCardinality(count);
+	Vector sort_keys(LogicalType::BLOB);
+	CreateSortKeyHelpers::CreateSortKey(pair, modifiers, sort_keys);
+	UnifiedVectorFormat format;
+	value.ToUnifiedFormat(format);
+	auto &validity = FlatVector::ValidityMutable(sort_keys);
+	for (idx_t i = 0; i < count; i++) {
+		if (!format.validity.RowIsValid(format.sel->get_index(i))) {
+			validity.SetInvalid(i);
+		}
+	}
+	ListUpdateFunction<true>(&sort_keys, aggr_input_data, 1, states, count);
+}
+
+struct CollatedQuantileValues : FlattenedQuantileValues<string_t> {
+	explicit CollatedQuantileValues(const LogicalType &key_type) {
+		key.Initialize(Allocator::DefaultAllocator(), vector<LogicalType> {key_type}, 1);
+	}
+
+	static unique_ptr<FunctionLocalState> Init(const BoundAggregateFunction &function, optional_ptr<FunctionData>) {
+		return make_uniq<CollatedQuantileValues>(function.GetArguments().back());
+	}
+
+	DataChunk key;
+};
+
+template <bool COLLATED>
+static void DecodeQuantileSortKey(AggregateFinalizeData &finalize_data, string_t sort_key, Vector &result,
+                                  idx_t result_idx) {
+	const OrderModifiers modifiers(OrderType::ASCENDING, OrderByNullType::NULLS_LAST);
+	if (COLLATED) {
+		auto &key = finalize_data.input.local_state->Cast<CollatedQuantileValues>().key;
+		key.Reset();
+		const auto key_size = CreateSortKeyHelpers::DecodeSortKey(sort_key, key.data[0], 0, modifiers);
+		sort_key = string_t(sort_key.GetData() + key_size, UnsafeNumericCast<uint32_t>(sort_key.GetSize() - key_size));
+	}
+	CreateSortKeyHelpers::DecodeSortKey(sort_key, result, result_idx, modifiers);
+}
+
+template <bool COLLATED>
 struct QuantileScalarFallback : QuantileOperation {
 	//! The fallback buffers sort keys instead of the input values
 	static LogicalType GetElementType(AggregateInputData &) {
@@ -278,8 +329,8 @@ struct QuantileScalarFallback : QuantileOperation {
 		auto &flattened = FlattenedQuantileValues<string_t>::Flatten(finalize_data, state.linked_list);
 		QuantileInterpolator<true> interp(bind_data.quantiles[0], state.linked_list.total_capacity, bind_data.desc);
 		auto interpolation_result = interp.InterpolateInternal<string_t>(flattened.Data());
-		CreateSortKeyHelpers::DecodeSortKey(interpolation_result, finalize_data.result, finalize_data.result_idx,
-		                                    OrderModifiers(OrderType::ASCENDING, OrderByNullType::NULLS_LAST));
+		DecodeQuantileSortKey<COLLATED>(finalize_data, interpolation_result, finalize_data.result,
+		                                finalize_data.result_idx);
 	}
 };
 
@@ -371,6 +422,7 @@ struct QuantileListOperation : QuantileOperation {
 	}
 };
 
+template <bool COLLATED>
 struct QuantileListFallback : QuantileOperation {
 	//! The fallback buffers sort keys instead of the input values
 	static LogicalType GetElementType(AggregateInputData &) {
@@ -401,8 +453,7 @@ struct QuantileListFallback : QuantileOperation {
 			QuantileInterpolator<true> interp(quantile, state.linked_list.total_capacity, bind_data.desc);
 			interp.begin = lower;
 			auto interpolation_result = interp.InterpolateInternal<string_t>(flattened.Data());
-			CreateSortKeyHelpers::DecodeSortKey(interpolation_result, result, ridx + q,
-			                                    OrderModifiers(OrderType::ASCENDING, OrderByNullType::NULLS_LAST));
+			DecodeQuantileSortKey<COLLATED>(finalize_data, interpolation_result, result, ridx + q);
 			lower = interp.FRN;
 		}
 		entry.length = bind_data.quantiles.size();
@@ -457,16 +508,28 @@ struct ScalarDiscreteQuantile {
 	}
 
 	static AggregateFunction GetFallback(const LogicalType &type) {
+		auto fun = GetSortKeyFunction<false>(type);
+		fun.SetStructStateExport(
+		    QuantileStateLayout<QuantileState<string_t>, StateListType<StateSortKey<StateInputType<0>>>>);
+		return fun;
+	}
+
+	static AggregateFunction GetCollated(const LogicalType &type) {
+		return GetSortKeyFunction<true>(type);
+	}
+
+	template <bool COLLATED>
+	static AggregateFunction GetSortKeyFunction(const LogicalType &type) {
 		using STATE = QuantileState<string_t>;
-		using OP = QuantileScalarFallback;
+		using OP = QuantileScalarFallback<COLLATED>;
 
 		AggregateFunction fun({type}, type, AggregateFunction::StateSize<STATE>,
 		                      AggregateFunction::StateInitialize<STATE, OP, AggregateDestructorType::LEGACY>,
-		                      QuantileSortKeyUpdate, ListCombineFunction<OP>,
+		                      COLLATED ? QuantileCollatedSortKeyUpdate : QuantileSortKeyUpdate, ListCombineFunction<OP>,
 		                      AggregateFunction::StateVoidFinalize<STATE, OP>, nullptr, nullptr,
 		                      AggregateFunction::StateDestroy<STATE, OP>);
-		fun.SetInitLocalStateFinalizeCallback(FlattenedQuantileValues<string_t>::Init);
-		fun.SetStructStateExport(QuantileStateLayout<STATE, StateListType<StateSortKey<StateInputType<0>>>>);
+		fun.SetInitLocalStateFinalizeCallback(COLLATED ? CollatedQuantileValues::Init
+		                                               : FlattenedQuantileValues<string_t>::Init);
 		return fun;
 	}
 };
@@ -488,16 +551,28 @@ struct ListDiscreteQuantile {
 	}
 
 	static AggregateFunction GetFallback(const LogicalType &type) {
+		auto fun = GetSortKeyFunction<false>(type);
+		fun.SetStructStateExport(
+		    QuantileStateLayout<QuantileState<string_t>, StateListType<StateSortKey<StateInputType<0>>>>);
+		return fun;
+	}
+
+	static AggregateFunction GetCollated(const LogicalType &type) {
+		return GetSortKeyFunction<true>(type);
+	}
+
+	template <bool COLLATED>
+	static AggregateFunction GetSortKeyFunction(const LogicalType &type) {
 		using STATE = QuantileState<string_t>;
-		using OP = QuantileListFallback;
+		using OP = QuantileListFallback<COLLATED>;
 
 		AggregateFunction fun({type}, LogicalType::LIST(type), AggregateFunction::StateSize<STATE>,
 		                      AggregateFunction::StateInitialize<STATE, OP, AggregateDestructorType::LEGACY>,
-		                      QuantileSortKeyUpdate, ListCombineFunction<OP>,
+		                      COLLATED ? QuantileCollatedSortKeyUpdate : QuantileSortKeyUpdate, ListCombineFunction<OP>,
 		                      AggregateFunction::StateFinalize<STATE, list_entry_t, OP>, nullptr, nullptr,
 		                      AggregateFunction::StateDestroy<STATE, OP>);
-		fun.SetInitLocalStateFinalizeCallback(FlattenedQuantileValues<string_t>::Init);
-		fun.SetStructStateExport(QuantileStateLayout<STATE, StateListType<StateSortKey<StateInputType<0>>>>);
+		fun.SetInitLocalStateFinalizeCallback(COLLATED ? CollatedQuantileValues::Init
+		                                               : FlattenedQuantileValues<string_t>::Init);
 		return fun;
 	}
 };
@@ -510,6 +585,20 @@ AggregateFunction GetDiscreteQuantile(const LogicalType &type) {
 
 AggregateFunction GetDiscreteQuantileList(const LogicalType &type) {
 	return GetDiscreteQuantileTemplated<ListDiscreteQuantile>(type);
+}
+
+static AggregateFunction GetCollatedDiscreteQuantile(const LogicalType &type) {
+	auto fun = ScalarDiscreteQuantile::GetCollated(type);
+	fun.SetStatisticsCallback(AggregateFunction::PropagateInputValueStats);
+	return fun;
+}
+
+static unique_ptr<Expression> CollatedQuantileKey(ClientContext &context, const Expression &input) {
+	auto key = input.Copy();
+	if (!ExpressionBinder::PushCollation(context, key, input.GetReturnType())) {
+		return nullptr;
+	}
+	return key;
 }
 
 //===--------------------------------------------------------------------===//
@@ -700,7 +789,16 @@ static bool CanInterpolate(const LogicalType &type) {
 
 struct MedianFunction {
 	static AggregateFunction GetAggregate(const LogicalType &type) {
-		auto fun = CanInterpolate(type) ? GetContinuousQuantile(type) : GetDiscreteQuantile(type);
+		return Describe(CanInterpolate(type) ? GetContinuousQuantile(type) : GetDiscreteQuantile(type));
+	}
+
+	static AggregateFunction GetCollatedAggregate(const LogicalType &type, const LogicalType &key_type) {
+		auto fun = Describe(GetCollatedDiscreteQuantile(type));
+		fun.GetSignature().AddParameter("key", key_type);
+		return fun;
+	}
+
+	static AggregateFunction Describe(AggregateFunction fun) {
 		fun.SetName("median");
 		fun.SetSerializeCallback(QuantileBindData::Serialize);
 		fun.SetDeserializeCallback(Deserialize);
@@ -718,14 +816,47 @@ struct MedianFunction {
 	static unique_ptr<FunctionData> Bind(BindAggregateFunctionInput &input) {
 		auto &function = input.GetBoundFunction();
 		auto &arguments = input.GetArguments();
-		function.ReplaceImplementation(GetAggregate(arguments[0]->GetReturnType()));
+		const auto type = arguments[0]->GetReturnType();
+		auto key = CanInterpolate(type) ? nullptr : CollatedQuantileKey(input.GetClientContext(), *arguments[0]);
+		if (key) {
+			function.ReplaceImplementation(GetCollatedAggregate(type, key->GetReturnType()));
+			arguments.push_back(std::move(key));
+		} else {
+			function.ReplaceImplementation(GetAggregate(type));
+		}
 		return make_uniq<QuantileBindData>(Value::DECIMAL(int16_t(5), 2, 1));
 	}
 };
 
+static unique_ptr<FunctionData>
+BindDiscreteQuantile(BindAggregateFunctionInput &input, AggregateFunction (*get_aggregate)(const LogicalType &),
+                     AggregateFunction (*get_collated_aggregate)(const LogicalType &, const LogicalType &)) {
+	auto &function = input.GetBoundFunction();
+	auto &arguments = input.GetArguments();
+	auto bind_data = BindQuantile(input);
+	const auto type = arguments[0]->GetReturnType();
+	auto key = CollatedQuantileKey(input.GetClientContext(), *arguments[0]);
+	if (key) {
+		function.ReplaceImplementation(get_collated_aggregate(type, key->GetReturnType()));
+		arguments.push_back(std::move(key));
+	} else {
+		function.ReplaceImplementation(get_aggregate(type));
+	}
+	return bind_data;
+}
+
 struct DiscreteQuantileListFunction {
 	static AggregateFunction GetAggregate(const LogicalType &type) {
-		auto fun = GetDiscreteQuantileList(type);
+		return Describe(GetDiscreteQuantileList(type));
+	}
+
+	static AggregateFunction GetCollatedAggregate(const LogicalType &type, const LogicalType &key_type) {
+		auto fun = Describe(ListDiscreteQuantile::GetCollated(type));
+		fun.GetSignature().AddParameter("key", key_type);
+		return fun;
+	}
+
+	static AggregateFunction Describe(AggregateFunction fun) {
 		fun.SetName("quantile_disc");
 		fun.SetBindCallback(Bind);
 		fun.SetSerializeCallback(QuantileBindData::Serialize);
@@ -746,16 +877,22 @@ struct DiscreteQuantileListFunction {
 	}
 
 	static unique_ptr<FunctionData> Bind(BindAggregateFunctionInput &input) {
-		auto &function = input.GetBoundFunction();
-		auto &arguments = input.GetArguments();
-		function.ReplaceImplementation(GetAggregate(arguments[0]->GetReturnType()));
-		return BindQuantile(input);
+		return BindDiscreteQuantile(input, GetAggregate, GetCollatedAggregate);
 	}
 };
 
 struct DiscreteQuantileFunction {
 	static AggregateFunction GetAggregate(const LogicalType &type) {
-		auto fun = GetDiscreteQuantile(type);
+		return Describe(GetDiscreteQuantile(type));
+	}
+
+	static AggregateFunction GetCollatedAggregate(const LogicalType &type, const LogicalType &key_type) {
+		auto fun = Describe(GetCollatedDiscreteQuantile(type));
+		fun.GetSignature().AddParameter("key", key_type);
+		return fun;
+	}
+
+	static AggregateFunction Describe(AggregateFunction fun) {
 		fun.SetName("quantile_disc");
 		fun.SetBindCallback(Bind);
 		fun.SetSerializeCallback(QuantileBindData::Serialize);
@@ -781,10 +918,7 @@ struct DiscreteQuantileFunction {
 	}
 
 	static unique_ptr<FunctionData> Bind(BindAggregateFunctionInput &input) {
-		auto &function = input.GetBoundFunction();
-		auto &arguments = input.GetArguments();
-		function.ReplaceImplementation(GetAggregate(arguments[0]->GetReturnType()));
-		return BindQuantile(input);
+		return BindDiscreteQuantile(input, GetAggregate, GetCollatedAggregate);
 	}
 };
 

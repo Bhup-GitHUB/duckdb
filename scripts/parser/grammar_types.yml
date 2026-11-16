@@ -253,6 +253,7 @@ AlterInfo:
   rules:
     - AlterOptions
     - AlterSetSchemaStmt
+    - AlterRoutineSetSchemaStmt
     - AlterTableStmt
     - AlterDatabaseStmt
     - AlterDatabaseConfigStmt

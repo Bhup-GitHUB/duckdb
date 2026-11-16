@@ -15,13 +15,9 @@ static unique_ptr<Expression> AddCastExpressionInternal(unique_ptr<Expression> e
 	if (ExpressionBinder::GetExpressionReturnType(*expr) == target_type) {
 		return expr;
 	}
-	auto &expr_type = expr->GetReturnType();
-	if (target_type.id() == LogicalTypeId::LIST && expr_type.id() == LogicalTypeId::LIST) {
-		auto &target_list = ListType::GetChildType(target_type);
-		auto &expr_list = ListType::GetChildType(expr_type);
-		if (target_list.id() == LogicalTypeId::ANY || expr_list == target_list) {
-			return expr;
-		}
+	if (target_type.id() == LogicalTypeId::LIST && expr->GetReturnType().id() == LogicalTypeId::LIST &&
+	    ListType::GetChildType(target_type).id() == LogicalTypeId::ANY) {
+		return expr;
 	}
 	if (bind_source == CastBindSource::DEFAULT) {
 		return BoundCastExpression::CreateDefault(std::move(expr), target_type, std::move(bound_cast), try_cast);

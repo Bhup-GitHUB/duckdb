@@ -931,6 +931,42 @@ static bool IsTypeLossy(const LogicalType &type) {
 	return type.id() == LogicalTypeId::HUGEINT || type.id() == LogicalTypeId::UHUGEINT;
 }
 
+static bool IsLossyAliasedType(const LogicalType &type) {
+	return type.HasAlias() && TypeVisitor::Contains(type, IsTypeLossy);
+}
+
+static LogicalType ReplaceLossyAliasedTypes(const LogicalType &type) {
+	if (IsLossyAliasedType(type)) {
+		return LogicalType::VARCHAR;
+	}
+	if (!type.HasParameters() || !TypeVisitor::Contains(type, IsLossyAliasedType)) {
+		return type;
+	}
+	auto replace_children = [](child_list_t<LogicalType> children) {
+		for (auto &child : children) {
+			child.second = ReplaceLossyAliasedTypes(child.second);
+		}
+		return children;
+	};
+	switch (type.id()) {
+	case LogicalTypeId::STRUCT:
+		return LogicalType::STRUCT(replace_children(StructType::GetChildTypes(type)));
+	case LogicalTypeId::TUPLE:
+		return LogicalType::TUPLE(replace_children(StructType::GetChildTypes(type)));
+	case LogicalTypeId::UNION:
+		return LogicalType::UNION(replace_children(UnionType::CopyMemberTypes(type)));
+	case LogicalTypeId::LIST:
+		return LogicalType::LIST(ReplaceLossyAliasedTypes(ListType::GetChildType(type)));
+	case LogicalTypeId::ARRAY:
+		return LogicalType::ARRAY(ReplaceLossyAliasedTypes(ArrayType::GetChildType(type)), ArrayType::GetSize(type));
+	case LogicalTypeId::MAP:
+		return LogicalType::MAP(ReplaceLossyAliasedTypes(MapType::KeyType(type)),
+		                        ReplaceLossyAliasedTypes(MapType::ValueType(type)));
+	default:
+		return type;
+	}
+}
+
 static bool IsExtensionGeometryType(const LogicalType &type, ClientContext &context) {
 	if (type.id() != LogicalTypeId::BLOB) {
 		return false;
@@ -961,6 +997,12 @@ static vector<unique_ptr<Expression>> ParquetWriteSelect(CopyToSelectInput &inpu
 			// Cast the column to GEOMETRY
 			auto cast_expr =
 			    BoundCastExpression::AddCastToType(context, std::move(expr), LogicalType::GEOMETRY(), false);
+			cast_expr->SetAlias(name);
+			result.push_back(std::move(cast_expr));
+			any_change = true;
+		} else if (TypeVisitor::Contains(type, IsLossyAliasedType)) {
+			auto cast_expr =
+			    BoundCastExpression::AddCastToType(context, std::move(expr), ReplaceLossyAliasedTypes(type), false);
 			cast_expr->SetAlias(name);
 			result.push_back(std::move(cast_expr));
 			any_change = true;

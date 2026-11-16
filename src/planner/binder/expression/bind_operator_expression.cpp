@@ -308,6 +308,11 @@ BindResult ExpressionBinder::BindExpression(OperatorExpression &op, idx_t depth)
 	if (!function_name.empty()) {
 		return BindOperatorAsFunction(op, Identifier(function_name), std::move(children));
 	}
+	if ((operator_type == ExpressionType::COMPARE_IN || operator_type == ExpressionType::COMPARE_NOT_IN) &&
+	    children.size() == 1) {
+		return BindResult(
+		    make_uniq<BoundConstantExpression>(Value::BOOLEAN(operator_type == ExpressionType::COMPARE_NOT_IN)));
+	}
 
 	// now resolve the types
 	LogicalType result_type = ResolveOperatorType(op, children);

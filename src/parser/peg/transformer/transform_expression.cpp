@@ -1301,6 +1301,12 @@ unique_ptr<ParsedExpression> PEGTransformerFactory::TransformInClause(PEGTransfo
 unique_ptr<ParsedExpression>
 PEGTransformerFactory::TransformInContainsExpression(PEGTransformer &transformer,
                                                      unique_ptr<ParsedExpression> other_operator_expression) {
+	if (other_operator_expression->GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &row = other_operator_expression->Cast<FunctionExpression>();
+		if (row.FunctionName() == "row" && row.GetArguments().empty()) {
+			return make_uniq<OperatorExpression>(ExpressionType::COMPARE_IN, vector<unique_ptr<ParsedExpression>>());
+		}
+	}
 	vector<unique_ptr<ParsedExpression>> children;
 	children.push_back(std::move(other_operator_expression));
 	return make_uniq<FunctionExpression>("contains", std::move(children));

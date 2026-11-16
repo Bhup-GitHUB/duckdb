@@ -228,15 +228,14 @@ public:
 			if (a_prefix != b_prefix) {
 				return BSwapIfLE(a_prefix) > BSwapIfLE(b_prefix) ? 1 : -1;
 			}
-			if (left_length <= INLINE_LENGTH && right_length <= INLINE_LENGTH) {
-				const auto inline_cmp =
-				    CompareInlineBytes(const_data_ptr_cast(left.GetPrefix()), const_data_ptr_cast(right.GetPrefix()));
-				if (inline_cmp != 0) {
-					return inline_cmp;
+			if (min_length > PREFIX_LENGTH) {
+				const auto a_rest = Load<uint64_t>(const_data_ptr_cast(left.GetData()) + PREFIX_LENGTH);
+				const auto b_rest = Load<uint64_t>(const_data_ptr_cast(right.GetData()) + PREFIX_LENGTH);
+				if (a_rest != b_rest) {
+					return BSwapIfLE(a_rest) > BSwapIfLE(b_rest) ? 1 : -1;
 				}
-				return left_length == right_length ? 0 : left_length > right_length ? 1 : -1;
 			}
-			compared = PREFIX_LENGTH;
+			compared = INLINE_LENGTH;
 #endif
 			if (min_length > compared) {
 				const auto memcmp_res =
@@ -246,20 +245,6 @@ public:
 				}
 			}
 			return left_length == right_length ? 0 : left_length > right_length ? 1 : -1;
-		}
-
-		static int8_t CompareInlineBytes(const_data_ptr_t left, const_data_ptr_t right) {
-			const auto left_prefix = Load<uint32_t>(left);
-			const auto right_prefix = Load<uint32_t>(right);
-			if (left_prefix != right_prefix) {
-				return BSwapIfLE(left_prefix) > BSwapIfLE(right_prefix) ? 1 : -1;
-			}
-			const auto left_rest = Load<uint64_t>(left + sizeof(uint32_t));
-			const auto right_rest = Load<uint64_t>(right + sizeof(uint32_t));
-			if (left_rest != right_rest) {
-				return BSwapIfLE(left_rest) > BSwapIfLE(right_rest) ? 1 : -1;
-			}
-			return 0;
 		}
 
 		static bool GreaterThan(const string_t &left, const string_t &right) {

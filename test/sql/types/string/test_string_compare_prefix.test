@@ -46,6 +46,43 @@ SELECT count(*) FROM b l, b r WHERE (l.v < r.v) <> (l.r < r.r) OR (l.v > r.v) <>
 0
 
 statement ok
+CREATE TABLE w AS SELECT DISTINCT v FROM (
+	SELECT left(base, n) AS v FROM (SELECT 'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH' AS base), range(45) t(n)
+	UNION ALL
+	SELECT left(left(base, p) || chr(ascii(substr(base, p + 1, 1)) + d) || substr(base, p + 2), CASE WHEN k = 0 THEN p + 1 ELSE 44 END) AS v
+	FROM (SELECT 'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH' AS base), range(44) t(p), (VALUES (-1), (1)) s(d), range(2) u(k)
+)
+
+statement ok
+CREATE TABLE wr AS SELECT v, dense_rank() OVER (ORDER BY v) AS r FROM w
+
+query II
+SELECT count(*), max(r) FROM wr
+----
+219	219
+
+query I
+SELECT count(*) FROM wr l, wr r WHERE (l.v < r.v) <> (l.r < r.r) OR (l.v > r.v) <> (l.r > r.r) OR (l.v = r.v) <> (l.r = r.r)
+----
+0
+
+statement ok
+CREATE TABLE z AS SELECT DISTINCT unhex(v) AS v FROM (
+	SELECT left(base, 2 * n) AS v FROM (SELECT '6162636465660000000000006768696A0000000000000000' AS base), range(25) t(n)
+	UNION ALL
+	SELECT left(left(base, 2 * p) || x || substr(base, 2 * p + 3), CASE WHEN k = 0 THEN 2 * p + 2 ELSE 48 END) AS v
+	FROM (SELECT '6162636465660000000000006768696A0000000000000000' AS base), range(24) t(p), (VALUES ('00'), ('01'), ('FF')) s(x), range(2) u(k)
+)
+
+statement ok
+CREATE TABLE zr AS SELECT v, dense_rank() OVER (ORDER BY v) AS r FROM z
+
+query I
+SELECT count(*) FROM zr l, zr r WHERE (l.v < r.v) <> (l.r < r.r) OR (l.v > r.v) <> (l.r > r.r) OR (l.v = r.v) <> (l.r = r.r)
+----
+0
+
+statement ok
 CREATE TABLE big AS SELECT r, v FROM s, range(1000) t(i)
 
 query II

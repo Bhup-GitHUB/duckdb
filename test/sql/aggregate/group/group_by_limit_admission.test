@@ -248,3 +248,24 @@ query II
 EXPLAIN SELECT k, count(*) FROM d GROUP BY k LIMIT 10
 ----
 physical_plan	<REGEX>:.*Dynamic Filter \(k ?<= ?\?\).*
+
+query II
+EXPLAIN WITH RECURSIVE q(i, x) AS (SELECT 0, range FROM range(10000) UNION ALL SELECT i + 1, x + 100000 * c FROM (SELECT i, x, count(*) AS c FROM q GROUP BY i, x ORDER BY x LIMIT 100) t WHERE i < 3) SELECT i, count(*), min(x), max(x) FROM q GROUP BY i ORDER BY i
+----
+physical_plan	<REGEX>:.*Group Limit: 100.*
+
+query IIII
+WITH RECURSIVE q(i, x) AS (SELECT 0, range FROM range(10000) UNION ALL SELECT i + 1, x + 100000 * c FROM (SELECT i, x, count(*) AS c FROM q GROUP BY i, x ORDER BY x LIMIT 100) t WHERE i < 3) SELECT i, count(*), min(x), max(x) FROM q GROUP BY i ORDER BY i
+----
+0	10000	0	9999
+1	100	100000	100099
+2	100	200000	200099
+3	100	300000	300099
+
+query IIII
+WITH RECURSIVE q(i, x) AS (SELECT 0, range FROM range(10000) UNION ALL SELECT i + 1, x + 100000 * c FROM (SELECT i, x, count(*) AS c FROM q GROUP BY i, x ORDER BY x DESC LIMIT 100) t WHERE i < 3) SELECT i, count(*), min(x), max(x) FROM q GROUP BY i ORDER BY i
+----
+0	10000	0	9999
+1	100	109900	109999
+2	100	209900	209999
+3	100	309900	309999

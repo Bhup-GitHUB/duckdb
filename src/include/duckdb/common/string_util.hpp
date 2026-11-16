@@ -224,6 +224,8 @@ public:
 
 	//! Return a string that formats the give number of bytes
 	DUCKDB_API static string BytesToHumanReadableString(idx_t bytes, idx_t multiplier = 1024);
+	DUCKDB_API static string FormatTiming(double seconds);
+	DUCKDB_API static string FormatCount(idx_t count, char thousand_separator = ',');
 
 	DUCKDB_API static string TryParseFormattedBytes(const string &arg, idx_t &result);
 

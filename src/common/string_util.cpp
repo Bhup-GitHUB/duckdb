@@ -357,6 +357,34 @@ string StringUtil::BytesToHumanReadableString(idx_t bytes, idx_t multiplier) {
 	return to_string(array[0]) + (bytes == 1 ? " byte" : " bytes");
 }
 
+string StringUtil::FormatTiming(double seconds) {
+	if (seconds >= 1.0) {
+		return StringUtil::Format("%.2fs", seconds);
+	}
+	if (seconds >= 0.001) {
+		return StringUtil::Format("%.1fms", seconds * 1000.0);
+	}
+	return StringUtil::Format("%.0fµs", seconds * 1000000.0);
+}
+
+string StringUtil::FormatCount(idx_t count, char thousand_separator) {
+	string result = std::to_string(count);
+	if (!thousand_separator) {
+		return result;
+	}
+	string formatted;
+	idx_t digits_until_separator = result.size() % 3 == 0 ? 3 : result.size() % 3;
+	for (idx_t i = 0; i < result.size(); i++) {
+		if (digits_until_separator == 0) {
+			formatted += thousand_separator;
+			digits_until_separator = 3;
+		}
+		formatted += result[i];
+		digits_until_separator--;
+	}
+	return formatted;
+}
+
 string StringUtil::TryParseFormattedBytes(const string &arg, idx_t &result) {
 	// split based on the number/non-number
 	idx_t idx = 0;

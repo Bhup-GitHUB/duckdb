@@ -534,38 +534,10 @@ static void ZeroOperatorTimings(ExplainTreeNode &node) {
 //===--------------------------------------------------------------------===//
 // Formatting helpers
 //===--------------------------------------------------------------------===//
-static string FormatCount(idx_t count, char thousand_separator) {
-	string result = std::to_string(count);
-	if (!thousand_separator) {
-		return result;
-	}
-	string formatted;
-	idx_t digits_until_separator = result.size() % 3 == 0 ? 3 : result.size() % 3;
-	for (idx_t i = 0; i < result.size(); i++) {
-		if (digits_until_separator == 0) {
-			formatted += thousand_separator;
-			digits_until_separator = 3;
-		}
-		formatted += result[i];
-		digits_until_separator--;
-	}
-	return formatted;
-}
-
-static string FormatTiming(double seconds) {
-	if (seconds >= 1.0) {
-		return StringUtil::Format("%.2fs", seconds);
-	}
-	if (seconds >= 0.001) {
-		return StringUtil::Format("%.1fms", seconds * 1000.0);
-	}
-	return StringUtil::Format("%.0fµs", seconds * 1000000.0);
-}
-
 //! Heat-color the timing based on the share of the total query time spent in this operator
 static ExplainSpan TimingSpan(double seconds, double total_time) {
 	double fraction = total_time > 0 ? seconds / total_time : 0;
-	auto text = FormatTiming(seconds);
+	auto text = StringUtil::FormatTiming(seconds);
 	if (fraction >= 0.25) {
 		return ExplainSpan(std::move(text), TreeRenderType::TIMING_CRITICAL);
 	}
@@ -992,11 +964,12 @@ private:
 		ExplainLine metrics;
 		if (node.rows.IsValid()) {
 			auto rows = node.rows.GetIndex();
-			metrics.emplace_back(FormatCount(rows, thousand_separator) + (rows == 1 ? " row" : " rows"),
+			metrics.emplace_back(StringUtil::FormatCount(rows, thousand_separator) + (rows == 1 ? " row" : " rows"),
 			                     TreeRenderType::ROWS);
 		} else if (node.estimated_rows.IsValid()) {
 			auto estimate = node.estimated_rows.GetIndex();
-			metrics.emplace_back("~" + FormatCount(estimate, thousand_separator) + (estimate == 1 ? " row" : " rows"),
+			metrics.emplace_back("~" + StringUtil::FormatCount(estimate, thousand_separator) +
+			                         (estimate == 1 ? " row" : " rows"),
 			                     TreeRenderType::KEY);
 		}
 		if (node.timing >= 0) {
@@ -1044,11 +1017,12 @@ private:
 		BoxMetrics metrics;
 		if (node.rows.IsValid()) {
 			auto rows = node.rows.GetIndex();
-			metrics.left.emplace_back(FormatCount(rows, thousand_separator) + (rows == 1 ? " row" : " rows"),
+			metrics.left.emplace_back(StringUtil::FormatCount(rows, thousand_separator) +
+			                              (rows == 1 ? " row" : " rows"),
 			                          TreeRenderType::ROWS);
 		} else if (node.estimated_rows.IsValid()) {
 			auto estimate = node.estimated_rows.GetIndex();
-			metrics.left.emplace_back("~" + FormatCount(estimate, thousand_separator) +
+			metrics.left.emplace_back("~" + StringUtil::FormatCount(estimate, thousand_separator) +
 			                              (estimate == 1 ? " row" : " rows"),
 			                          TreeRenderType::KEY);
 		}

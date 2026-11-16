@@ -260,6 +260,20 @@ RowGroupOrderKey RowGroupOrderKeys::Get(const BaseStatistics &stats, OrderByStat
 	return key;
 }
 
+RowGroupOrderKey RowGroupOrderKeys::Get(const Value &value, OrderType order_type, OrderByNullType null_order) {
+	if (value.IsNull()) {
+		return Null(null_order);
+	}
+	auto key = RowGroupOrderKey();
+	VisitPhysicalType(value.type().InternalType(), [&]<class T>() {
+		const auto data = value.GetValueUnsafe<T>();
+		CreateSortKeyHelpers::CreateSortKey(value.type(), const_data_ptr_cast(&data),
+		                                    OrderModifiers(order_type, null_order), data_ptr_cast(&key.part0));
+	});
+	key.ByteSwap();
+	return key;
+}
+
 RowGroupOrderKey RowGroupOrderKeys::Null(OrderByNullType null_order) {
 	auto key = RowGroupOrderKey();
 	CreateSortKeyHelpers::CreateSortKey(LogicalType::SQLNULL, nullptr, OrderModifiers(OrderType::ASCENDING, null_order),

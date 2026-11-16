@@ -22,6 +22,7 @@ using RowGroupOrderKey = SortKey<SortKeyType::NO_PAYLOAD_FIXED_24>;
 struct RowGroupOrderKeys {
 	static RowGroupOrderKey Get(const BaseStatistics &stats, OrderByStatistics order_by, OrderType order_type,
 	                            OrderByNullType null_order);
+	static RowGroupOrderKey Get(const Value &value, OrderType order_type, OrderByNullType null_order);
 	static RowGroupOrderKey Null(OrderByNullType null_order);
 	static bool IsNull(const RowGroupOrderKey &key, OrderByNullType null_order);
 };

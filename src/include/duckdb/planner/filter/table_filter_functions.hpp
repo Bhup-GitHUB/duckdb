@@ -16,6 +16,7 @@
 #include "duckdb/function/scalar/tablefilter_functions.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/planner/table_filter_state.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
 
 namespace duckdb {
 
@@ -164,7 +165,7 @@ public:
 	//! result_sel contains local positions into sel rather than source row ids.
 	virtual idx_t LookupKeys(Vector &keys, const SelectionVector &sel, SelectionVector &result_sel,
 	                         idx_t count) const = 0;
-	virtual FilterPropagateResult LookupRange(const Value &lower_bound, const Value &upper_bound) const = 0;
+	virtual FilterPropagateResult LookupRange(const BaseStatistics &stats) const = 0;
 	virtual bool IsInitialized() const = 0;
 	static bool SupportedType(const LogicalType &type);
 	static unique_ptr<PrefixRangeFilter> CreatePrefixRangeFilter(const LogicalType &key_type);

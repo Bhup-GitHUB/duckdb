@@ -4,13 +4,14 @@
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/operator/comparison_operators.hpp"
+#include "duckdb/common/operator/decimal_cast_operators.hpp"
 #include "duckdb/common/operator/subtract.hpp"
 #include "duckdb/common/serializer/deserializer.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/common/types/vector.hpp"
+#include "duckdb/function/cast/default_casts.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 
-#include <cmath>
 #include <limits>
 
 namespace duckdb {
@@ -57,6 +58,33 @@ auto VisitNumeric(PhysicalType type, OP &&op) {
 	default:
 		throw InternalException("Unsupported type %s for numeric statistics", TypeIdToString(type));
 	}
+}
+
+template <class T>
+bool TryCastBounds(const BaseStatistics &stats, T &min, T &max) {
+	if (!NumericStats::HasMinMax(stats)) {
+		return false;
+	}
+	const auto &type = stats.GetType();
+	return VisitNumeric(type.InternalType(), [&]<class S>() {
+		if constexpr (std::is_same_v<S, interval_t>) {
+			return false;
+		} else {
+			const auto lower = NumericStats::GetMinUnsafe<S>(stats);
+			const auto upper = NumericStats::GetMaxUnsafe<S>(stats);
+			if constexpr (std::is_same_v<S, int16_t> || std::is_same_v<S, int32_t> || std::is_same_v<S, int64_t> ||
+			              std::is_same_v<S, hugeint_t>) {
+				if (type.id() == LogicalTypeId::DECIMAL) {
+					CastParameters parameters;
+					const auto width = DecimalType::GetWidth(type);
+					const auto scale = DecimalType::GetScale(type);
+					return TryCastFromDecimal::Operation(lower, min, parameters, width, scale) &&
+					       TryCastFromDecimal::Operation(upper, max, parameters, width, scale);
+				}
+			}
+			return TryCast::Operation(lower, min) && TryCast::Operation(upper, max);
+		}
+	});
 }
 
 } // namespace
@@ -220,11 +248,12 @@ FilterPropagateResult NumericStats::CheckZonemap(const BaseStatistics &stats, Ex
 bool NumericStats::ConstantsCoverRange(const BaseStatistics &stats, array_ptr<const Value> constants) {
 	auto &type = stats.GetType();
 	// values are compared as hugeint_t, which cannot hold large UINT128 values
-	if (!type.IsIntegral() || type.InternalType() == PhysicalType::UINT128 || !NumericStats::HasMinMax(stats)) {
+	hugeint_t min_value;
+	hugeint_t max_value;
+	if (!type.IsIntegral() || type.InternalType() == PhysicalType::UINT128 ||
+	    !TryCastRange(stats, min_value, max_value)) {
 		return false;
 	}
-	auto min_value = NumericStats::Min(stats).GetValue<hugeint_t>();
-	auto max_value = NumericStats::Max(stats).GetValue<hugeint_t>();
 	// covering [min, max] requires at least max - min + 1 constants
 	hugeint_t range;
 	if (!TrySubtractOperator::Operation(max_value, min_value, range) ||
@@ -384,23 +413,12 @@ bool NumericStats::HasMinMax(const BaseStatistics &stats) {
 	       });
 }
 
-bool NumericStats::TryGetDoubleRange(const BaseStatistics &stats, double &min, double &max) {
-	const auto &type = stats.GetType();
-	if (!type.IsNumeric() || !HasMinMax(stats)) {
-		return false;
-	}
-	VisitNumeric(type.InternalType(), [&]<class T>() {
-		if constexpr (!std::is_same_v<T, interval_t>) {
-			min = Cast::Operation<T, double>(GetMinUnsafe<T>(stats));
-			max = Cast::Operation<T, double>(GetMaxUnsafe<T>(stats));
-		}
-	});
-	if (type.id() == LogicalTypeId::DECIMAL) {
-		const auto scale = std::pow(10.0, DecimalType::GetScale(type));
-		min /= scale;
-		max /= scale;
-	}
-	return true;
+bool NumericStats::TryCastRange(const BaseStatistics &stats, double &min, double &max) {
+	return TryCastBounds(stats, min, max);
+}
+
+bool NumericStats::TryCastRange(const BaseStatistics &stats, hugeint_t &min, hugeint_t &max) {
+	return TryCastBounds(stats, min, max);
 }
 
 bool NumericStats::HasMin(const BaseStatistics &stats) {

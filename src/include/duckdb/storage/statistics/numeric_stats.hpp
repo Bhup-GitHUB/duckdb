@@ -54,7 +54,8 @@ struct NumericStats {
 	DUCKDB_API static Value Min(const BaseStatistics &stats);
 	//! Returns the max value - throws an exception if there is no max value
 	DUCKDB_API static Value Max(const BaseStatistics &stats);
-	DUCKDB_API static bool TryGetDoubleRange(const BaseStatistics &stats, double &min, double &max);
+	DUCKDB_API static bool TryCastRange(const BaseStatistics &stats, double &min, double &max);
+	DUCKDB_API static bool TryCastRange(const BaseStatistics &stats, hugeint_t &min, hugeint_t &max);
 	//! Sets the min value of the statistics
 	DUCKDB_API static void SetMin(BaseStatistics &stats, const Value &val);
 	//! Sets the max value of the statistics

@@ -261,12 +261,11 @@ struct StringPrefixConverter {
 	}
 };
 
-uint32_t StringMinComparable(const Value &value) {
-	return StringPrefixConverter::Convert(value.GetValueUnsafe<string_t>());
+uint32_t StringMinComparable(const string_t &min_string) {
+	return StringPrefixConverter::Convert(min_string);
 }
 
-uint32_t StringMaxComparable(const Value &value) {
-	const auto max_string = value.GetValueUnsafe<string_t>();
+uint32_t StringMaxComparable(const string_t &max_string) {
 	if (max_string.GetSize() >= string_t::PREFIX_BYTES) {
 		return max_string.GetPrefixIntegerComparable();
 	}
@@ -332,9 +331,9 @@ public:
 		return bitmap.template LookupKeys<T, NumericConverter<T>>(keys, sel, result_sel, count);
 	}
 
-	FilterPropagateResult LookupRange(const Value &lower_bound, const Value &upper_bound) const override {
-		const auto lb = lower_bound.GetValueUnsafe<T>();
-		const auto ub = upper_bound.GetValueUnsafe<T>();
+	FilterPropagateResult LookupRange(const BaseStatistics &stats) const override {
+		const auto lb = NumericStats::GetMinUnsafe<T>(stats);
+		const auto ub = NumericStats::GetMaxUnsafe<T>(stats);
 
 		const auto bitmap_min = static_cast<T>(bitmap.Min());
 		const auto bitmap_max = static_cast<T>(bitmap.Min() + bitmap.Span());
@@ -404,9 +403,9 @@ public:
 		return bitmap.template LookupKeys<string_t, StringPrefixConverter>(keys, sel, result_sel, count);
 	}
 
-	FilterPropagateResult LookupRange(const Value &lower_bound, const Value &upper_bound) const override {
-		auto lower_bound_comparable = StringMinComparable(lower_bound);
-		auto upper_bound_comparable = StringMaxComparable(upper_bound);
+	FilterPropagateResult LookupRange(const BaseStatistics &stats) const override {
+		auto lower_bound_comparable = StringMinComparable(StringStats::Min(stats));
+		auto upper_bound_comparable = StringMaxComparable(StringStats::Max(stats));
 		if (lower_bound_comparable > upper_bound_comparable) {
 			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 		}
@@ -667,16 +666,13 @@ FilterPropagateResult PrefixRangeScalarFun::FilterPrune(const FunctionStatistics
 		if (!NumericStats::HasMinMax(stats)) {
 			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 		}
-		return data.filter->LookupRange(NumericStats::Min(stats), NumericStats::Max(stats));
+		return data.filter->LookupRange(stats);
 	}
 	case StatisticsType::STRING_STATS: {
 		if (!StringStats::HasMinMax(stats)) {
 			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 		}
-		// String stats may contain raw parquet bytes that are not valid UTF-8. Reconstruct them as BLOBs so the
-		// prefix-range comparable logic can inspect the raw bytes without value-construction validation.
-		return data.filter->LookupRange(Value::BLOB_RAW(StringStats::Min(stats)),
-		                                Value::BLOB_RAW(StringStats::Max(stats)));
+		return data.filter->LookupRange(stats);
 	}
 	default:
 		return FilterPropagateResult::NO_PRUNING_POSSIBLE;

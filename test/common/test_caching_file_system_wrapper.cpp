@@ -446,6 +446,17 @@ TEST_CASE("CachingFileSystemWrapper list operations", "[file_system][caching]") 
 		REQUIRE(actual_files[idx] == expected_files[idx]);
 	}
 
+	vector<string> listed;
+	ListFilesOptions strict;
+	strict.strict = true;
+	FileSystem &wrapper = *caching_wrapper;
+	REQUIRE(wrapper.ListFiles(
+	    test_dir, [&listed](OpenFileInfo &info) { listed.push_back(info.path); }, nullptr, strict));
+	std::sort(listed.begin(), listed.end());
+	REQUIRE(listed == expected_files);
+	caching_wrapper->SyncFile(file_paths[0]);
+	caching_wrapper->SyncDirectory(test_dir);
+
 	for (const auto &file_path : file_paths) {
 		local_fs->TryRemoveFile(file_path);
 	}
@@ -518,7 +529,7 @@ TEST_CASE("Open file in opener filesystem cache modes", "[file_system][caching]"
 
 	// Shared variable both all caching modes.
 	string buffer(TEST_BUFFER_SIZE, '\0');
-	const auto &external_file_cache = db_instance.GetExternalFileCache();
+	auto &external_file_cache = db_instance.GetExternalFileCache();
 
 	auto run_case = [&](CachingMode mode) {
 		FileOpenFlags flags {FileFlags::FILE_FLAGS_READ};
@@ -737,7 +748,7 @@ TEST_CASE("CachingFileHandle Read returns correct FileBufferHandleGroup", "[file
 	auto &db_instance = *db.instance;
 	auto tracking_fs = make_uniq<TrackingFileSystem>();
 
-	const idx_t BLOCK_SIZE = db_instance.GetExternalFileCache().GetCacheMaxBlockSize(TestDirectoryPath());
+	const idx_t BLOCK_SIZE = ExternalFileCache::DEFAULT_BLOCK_SIZE;
 	const idx_t EXTRA = 100;
 	const idx_t FILE_SIZE = BLOCK_SIZE + EXTRA;
 
@@ -760,10 +771,10 @@ TEST_CASE("CachingFileHandle Read returns correct FileBufferHandleGroup", "[file
 		auto group = handle->Read(FILE_SIZE, 0);
 		auto &handles = group.GetHandles();
 		REQUIRE(handles.size() == 2);
-		REQUIRE(handles[0].start_offset == 0);
-		REQUIRE(handles[0].length == BLOCK_SIZE);
-		REQUIRE(handles[1].start_offset == 0);
-		REQUIRE(handles[1].length == EXTRA);
+		REQUIRE(memcmp(handles[0].Ptr(), content.data(), BLOCK_SIZE) == 0);
+		REQUIRE(handles[0].Size() == BLOCK_SIZE);
+		REQUIRE(memcmp(handles[1].Ptr(), content.data() + BLOCK_SIZE, EXTRA) == 0);
+		REQUIRE(handles[1].Size() == EXTRA);
 
 		string result(FILE_SIZE, '\0');
 		group.CopyTo(reinterpret_cast<data_ptr_t>(&result[0]), FILE_SIZE);
@@ -790,10 +801,10 @@ TEST_CASE("CachingFileHandle Read returns correct FileBufferHandleGroup", "[file
 		auto group = handle->Read(read_size, read_offset);
 		auto &handles = group.GetHandles();
 		REQUIRE(handles.size() == 2);
-		REQUIRE(handles[0].start_offset == BLOCK_SIZE - 200);
-		REQUIRE(handles[0].length == 200);
-		REQUIRE(handles[1].start_offset == 0);
-		REQUIRE(handles[1].length == 50);
+		REQUIRE(memcmp(handles[0].Ptr(), content.data() + read_offset, 200) == 0);
+		REQUIRE(handles[0].Size() == 200);
+		REQUIRE(memcmp(handles[1].Ptr(), content.data() + BLOCK_SIZE, 50) == 0);
+		REQUIRE(handles[1].Size() == 50);
 
 		string result(read_size, '\0');
 		group.CopyTo(reinterpret_cast<data_ptr_t>(&result[0]), read_size);
@@ -806,8 +817,8 @@ TEST_CASE("CachingFileHandle Read returns correct FileBufferHandleGroup", "[file
 		auto group = handle->Read(read_size, read_offset);
 		auto &handles = group.GetHandles();
 		REQUIRE(handles.size() == 1);
-		REQUIRE(handles[0].start_offset == 10);
-		REQUIRE(handles[0].length == 50);
+		REQUIRE(memcmp(handles[0].Ptr(), content.data() + read_offset, 50) == 0);
+		REQUIRE(handles[0].Size() == 50);
 
 		string result(read_size, '\0');
 		group.CopyTo(reinterpret_cast<data_ptr_t>(&result[0]), read_size);
@@ -818,8 +829,8 @@ TEST_CASE("CachingFileHandle Read returns correct FileBufferHandleGroup", "[file
 		auto group = handle->Read(100, 0);
 		auto &handles = group.GetHandles();
 		REQUIRE(handles.size() == 1);
-		REQUIRE(handles[0].start_offset == 0);
-		REQUIRE(handles[0].length == 100);
+		REQUIRE(memcmp(handles[0].Ptr(), content.data(), 100) == 0);
+		REQUIRE(handles[0].Size() == 100);
 	}
 }
 
@@ -845,7 +856,7 @@ TEST_CASE("CachingFileHandle EOF read behavior", "[file_system][caching]") {
 		auto group = handle->Read(100, content.size() - 10);
 		auto &handles = group.GetHandles();
 		REQUIRE(handles.size() == 1);
-		REQUIRE(handles[0].length == 10);
+		REQUIRE(handles[0].Size() == 10);
 
 		string result(10, '\0');
 		group.CopyTo(reinterpret_cast<data_ptr_t>(&result[0]), 10);
@@ -871,7 +882,7 @@ TEST_CASE("Fully cached read skips doesn't open file", "[file_system][caching]")
 	auto counting_fs = make_uniq<CountingFileSystem>();
 	auto *counting_fs_ptr = counting_fs.get();
 
-	const idx_t BLOCK_SIZE = db_instance.GetExternalFileCache().GetCacheMaxBlockSize(TestDirectoryPath());
+	const idx_t BLOCK_SIZE = ExternalFileCache::DEFAULT_BLOCK_SIZE;
 	const idx_t FILE_SIZE = BLOCK_SIZE;
 
 	string content(FILE_SIZE, 'X');

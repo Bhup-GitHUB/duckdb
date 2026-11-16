@@ -780,6 +780,15 @@ void SpecializeArgMinMaxNFunction(PhysicalType arg_type, BoundAggregateFunction 
 	case PhysicalType::DOUBLE:
 		SpecializeArgMinMaxNFunction<VAL_TYPE, MinMaxFixedValue<double>, COMPARATOR>(function);
 		break;
+	case PhysicalType::INT128:
+		SpecializeArgMinMaxNFunction<VAL_TYPE, MinMaxFixedValue<hugeint_t>, COMPARATOR>(function);
+		break;
+	case PhysicalType::UINT128:
+		SpecializeArgMinMaxNFunction<VAL_TYPE, MinMaxFixedValue<uhugeint_t>, COMPARATOR>(function);
+		break;
+	case PhysicalType::INTERVAL:
+		SpecializeArgMinMaxNFunction<VAL_TYPE, MinMaxFixedValue<interval_t>, COMPARATOR>(function);
+		break;
 #endif
 	default:
 		if (MinMaxWidenedValue::CanWiden(arg_type)) {
@@ -848,6 +857,17 @@ void SpecializeArgMinMaxNullNFunction(PhysicalType arg_type, BoundAggregateFunct
 		break;
 	case PhysicalType::DOUBLE:
 		SpecializeArgMinMaxNullNFunction<VAL_TYPE, MinMaxFixedValueOrNull<double, NULLS_LAST>, COMPARATOR>(function);
+		break;
+	case PhysicalType::INT128:
+		SpecializeArgMinMaxNullNFunction<VAL_TYPE, MinMaxFixedValueOrNull<hugeint_t, NULLS_LAST>, COMPARATOR>(function);
+		break;
+	case PhysicalType::UINT128:
+		SpecializeArgMinMaxNullNFunction<VAL_TYPE, MinMaxFixedValueOrNull<uhugeint_t, NULLS_LAST>, COMPARATOR>(
+		    function);
+		break;
+	case PhysicalType::INTERVAL:
+		SpecializeArgMinMaxNullNFunction<VAL_TYPE, MinMaxFixedValueOrNull<interval_t, NULLS_LAST>, COMPARATOR>(
+		    function);
 		break;
 #endif
 	default:

@@ -4,6 +4,7 @@
 #include "duckdb/storage/arena_allocator.hpp"
 #include "duckdb/common/operator/multiply.hpp"
 #include "duckdb/common/algorithm.hpp"
+#include "duckdb/common/bswap.hpp"
 #include "duckdb/common/operator/comparison_operators.hpp"
 #include "duckdb/common/pair.hpp"
 #include "duckdb/common/types/string_type.hpp"
@@ -72,9 +73,13 @@ struct HeapEntry<string_t> {
 	}
 
 	void Assign(ArenaAllocator &allocator, const string_t &new_val) {
+		value = Store(allocator, new_val, capacity, allocated_data);
+	}
+
+	static string_t Store(ArenaAllocator &allocator, const string_t &new_val, uint32_t &capacity,
+	                      data_ptr_t &allocated_data) {
 		if (new_val.IsInlined()) {
-			value = new_val;
-			return;
+			return new_val;
 		}
 
 		// Short path for first assignment
@@ -87,8 +92,7 @@ struct HeapEntry<string_t> {
 			capacity = UnsafeNumericCast<uint32_t>(new_capacity);
 			allocated_data = allocator.Allocate(capacity);
 			memcpy(allocated_data, new_val.GetData(), new_size);
-			value = string_t(const_char_ptr_cast(allocated_data), new_size);
-			return;
+			return string_t(const_char_ptr_cast(allocated_data), new_size);
 		}
 
 		// double allocation until value fits
@@ -106,7 +110,74 @@ struct HeapEntry<string_t> {
 		}
 		auto new_size = UnsafeNumericCast<uint32_t>(new_val.GetSize());
 		memcpy(allocated_data, new_val.GetData(), new_size);
-		value = string_t(const_char_ptr_cast(allocated_data), new_size);
+		return string_t(const_char_ptr_cast(allocated_data), new_size);
+	}
+};
+
+struct PrefixedString {
+	uint64_t high;
+	uint64_t low;
+	string_t value;
+
+	static PrefixedString Make(const string_t &value) {
+		uint64_t words[2] = {0, 0};
+		memcpy(words, value.GetData(), MinValue<idx_t>(value.GetSize(), sizeof(words)));
+		return PrefixedString {BSwapIfLE(words[0]), BSwapIfLE(words[1]), value};
+	}
+
+	friend bool operator>(const PrefixedString &left, const PrefixedString &right) {
+		if (left.high != right.high) {
+			return left.high > right.high;
+		}
+		if (left.low != right.low) {
+			return left.low > right.low;
+		}
+		const auto left_size = left.value.GetSize();
+		const auto right_size = right.value.GetSize();
+		const auto common = MinValue(left_size, right_size);
+		if (common > sizeof(uint64_t) * 2) {
+			const auto skip = sizeof(uint64_t) * 2;
+			const auto result = memcmp(left.value.GetData() + skip, right.value.GetData() + skip, common - skip);
+			if (result != 0) {
+				return result > 0;
+			}
+		}
+		return left_size > right_size;
+	}
+
+	friend bool operator==(const PrefixedString &left, const PrefixedString &right) {
+		return left.high == right.high && left.low == right.low && Equals::Operation(left.value, right.value);
+	}
+};
+
+template <>
+struct HeapEntry<PrefixedString> {
+	PrefixedString value;
+	uint32_t capacity;
+	data_ptr_t allocated_data;
+
+	HeapEntry() : value(), capacity(0), allocated_data(nullptr) {
+	}
+
+	HeapEntry(const HeapEntry &other) = delete;
+	HeapEntry &operator=(const HeapEntry &other) = delete;
+
+	HeapEntry(HeapEntry &&other) noexcept : value(other.value), capacity(other.capacity) {
+		allocated_data = other.allocated_data;
+		other.allocated_data = nullptr;
+	}
+
+	HeapEntry &operator=(HeapEntry &&other) noexcept {
+		value = other.value;
+		capacity = other.capacity;
+		allocated_data = other.allocated_data;
+		other.allocated_data = nullptr;
+		return *this;
+	}
+
+	void Assign(ArenaAllocator &allocator, const PrefixedString &new_val) {
+		value = PrefixedString {new_val.high, new_val.low,
+		                        HeapEntry<string_t>::Store(allocator, new_val.value, capacity, allocated_data)};
 	}
 };
 
@@ -339,15 +410,15 @@ struct MinMaxFixedValue {
 };
 
 struct MinMaxStringValue {
-	using TYPE = string_t;
+	using TYPE = PrefixedString;
 	using EXTRA_STATE = bool;
 
 	static TYPE Create(const UnifiedVectorFormat &format, const idx_t idx) {
-		return UnifiedVectorFormat::GetData<string_t>(format)[idx];
+		return PrefixedString::Make(UnifiedVectorFormat::GetData<string_t>(format)[idx]);
 	}
 
 	static void Assign(Vector &vector, const idx_t idx, const TYPE &value, const bool nulls_last) {
-		FlatVector::GetDataMutable<string_t>(vector)[idx] = StringVector::AddStringOrBlob(vector, value);
+		FlatVector::GetDataMutable<string_t>(vector)[idx] = StringVector::AddStringOrBlob(vector, value.value);
 	}
 
 	// Nothing to do here
@@ -362,17 +433,17 @@ struct MinMaxStringValue {
 
 // Use sort key to serialize/deserialize values
 struct MinMaxFallbackValue {
-	using TYPE = string_t;
+	using TYPE = PrefixedString;
 	using EXTRA_STATE = Vector;
 
 	static TYPE Create(const UnifiedVectorFormat &format, const idx_t idx) {
-		return UnifiedVectorFormat::GetData<string_t>(format)[idx];
+		return PrefixedString::Make(UnifiedVectorFormat::GetData<string_t>(format)[idx]);
 	}
 
 	static void Assign(Vector &vector, const idx_t idx, const TYPE &value, const bool nulls_last) {
 		auto order_by_null_type = nulls_last ? OrderByNullType::NULLS_LAST : OrderByNullType::NULLS_FIRST;
 		OrderModifiers modifiers(OrderType::ASCENDING, order_by_null_type);
-		CreateSortKeyHelpers::DecodeSortKey(value, vector, idx, modifiers);
+		CreateSortKeyHelpers::DecodeSortKey(value.value, vector, idx, modifiers);
 	}
 
 	static EXTRA_STATE CreateExtraState() {

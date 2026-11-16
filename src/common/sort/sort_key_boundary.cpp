@@ -2,6 +2,7 @@
 
 #include "duckdb/common/value_operations/value_operations.hpp"
 #include "duckdb/common/vector/constant_vector.hpp"
+#include "duckdb/common/vector/dictionary_vector.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 
@@ -127,6 +128,46 @@ bool SortKeyBoundaryFilter::Refresh(const SortKeyBoundary &boundary) {
 	return is_set;
 }
 
+void SortKeyBoundaryFilter::Compare(const Vector &input, idx_t col, Vector &result, idx_t count) {
+	const auto &modifier = modifiers[col];
+	const bool descending = modifier.order_type == OrderType::DESCENDING;
+	if (descending == (modifier.null_type == OrderByNullType::NULLS_FIRST)) {
+		VectorOperations::DistinctComparatorFill(input, boundary_values.data[col], result, count);
+	} else {
+		VectorOperations::DistinctComparatorNullsFirstFill(input, boundary_values.data[col], result, count);
+	}
+}
+
+const int8_t *SortKeyBoundaryFilter::DictionaryOrders(const Vector &input, idx_t count) {
+	static constexpr idx_t MAX_DICTIONARY_SIZE_THRESHOLD = 20000;
+	if (input.GetVectorType() != VectorType::DICTIONARY_VECTOR) {
+		return nullptr;
+	}
+	const auto size = DictionaryVector::DictionarySize(input);
+	const auto &id = DictionaryVector::DictionaryId(input);
+	if (!size.IsValid() || id.empty() || size.GetIndex() >= MAX_DICTIONARY_SIZE_THRESHOLD) {
+		return nullptr;
+	}
+	const auto dictionary_size = size.GetIndex();
+	if (id != dictionary_id || version != dictionary_version) {
+		if (dictionary_size > STANDARD_VECTOR_SIZE && 2 * count <= STANDARD_VECTOR_SIZE) {
+			return nullptr;
+		}
+		if (dictionary_size > dictionary_capacity) {
+			dictionary_orders = make_uniq<Vector>(LogicalType::TINYINT, dictionary_size);
+			dictionary_capacity = dictionary_size;
+		}
+		dictionary_id.clear();
+		boundary_values.SetChildCardinality(dictionary_size);
+		Compare(DictionaryVector::Child(input), 0, *dictionary_orders, dictionary_size);
+		boundary_values.SetChildCardinality(count);
+		dictionary_orders->Flatten();
+		dictionary_id = id;
+		dictionary_version = version;
+	}
+	return FlatVector::GetData<int8_t>(*dictionary_orders);
+}
+
 idx_t SortKeyBoundaryFilter::Select(DataChunk &keys, bool inclusive, SelectionVector &sel, idx_t &before) {
 	D_ASSERT(is_set);
 	boundary_values.SetChildCardinality(keys.size());
@@ -140,13 +181,18 @@ idx_t SortKeyBoundaryFilter::Select(DataChunk &keys, bool inclusive, SelectionVe
 		} else {
 			input.Slice(keys.data[col], ties, remaining);
 		}
-		const auto &modifier = modifiers[col];
-		const bool descending = modifier.order_type == OrderType::DESCENDING;
+		const bool descending = modifiers[col].order_type == OrderType::DESCENDING;
 		comparison.ResetFromCache(comparison_cache);
-		if (descending == (modifier.null_type == OrderByNullType::NULLS_FIRST)) {
-			VectorOperations::DistinctComparatorFill(input, boundary_values.data[col], comparison, remaining);
+		const auto dictionary = col == 0 ? DictionaryOrders(input, remaining) : nullptr;
+		if (dictionary) {
+			const auto &rows = DictionaryVector::SelVector(input);
+			auto result = FlatVector::GetDataMutable<int8_t>(comparison);
+			for (idx_t i = 0; i < remaining; i++) {
+				result[i] = dictionary[rows.get_index(i)];
+			}
+			FlatVector::SetSize(comparison, remaining);
 		} else {
-			VectorOperations::DistinctComparatorNullsFirstFill(input, boundary_values.data[col], comparison, remaining);
+			Compare(input, col, comparison, remaining);
 		}
 		const auto before_order = descending ? int8_t(1) : int8_t(-1);
 		auto sel_data = sel.data();

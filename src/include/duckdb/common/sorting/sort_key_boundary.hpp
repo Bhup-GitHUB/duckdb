@@ -61,6 +61,10 @@ public:
 	}
 
 private:
+	void Compare(const Vector &input, idx_t col, Vector &result, idx_t count);
+	const int8_t *DictionaryOrders(const Vector &input, idx_t count);
+
+private:
 	const vector<OrderModifiers> modifiers;
 	DataChunk compare_chunk;
 	DataChunk boundary_values;
@@ -70,6 +74,10 @@ private:
 	string key;
 	idx_t version = 0;
 	bool is_set = false;
+	unique_ptr<Vector> dictionary_orders;
+	idx_t dictionary_capacity = 0;
+	string dictionary_id;
+	idx_t dictionary_version = 0;
 };
 
 } // namespace duckdb

@@ -39,7 +39,7 @@ PEGTransformerFactory::TransformCreateJobStmt(PEGTransformer &transformer, const
 
 unique_ptr<SQLStatement> PEGTransformerFactory::TransformJobScript(PEGTransformer &transformer,
                                                                    const string &string_literal) {
-	auto parser = Parser::GetBuiltinParser();
+	Parser parser(transformer.options);
 	parser.ParseQuery(string_literal);
 	if (parser.statements.empty()) {
 		throw ParserException("CREATE JOB body cannot be empty");

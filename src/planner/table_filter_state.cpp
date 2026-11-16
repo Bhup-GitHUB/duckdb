@@ -141,7 +141,7 @@ static auto DispatchComparison(ExpressionType comparison, FUNC &func) {
 	}
 }
 
-template <class FUNC>
+template <bool STRINGS = true, class FUNC>
 static auto DispatchComparison(PhysicalType type, ExpressionType comparison, FUNC &&func) {
 	switch (type) {
 	case PhysicalType::BOOL:
@@ -173,7 +173,11 @@ static auto DispatchComparison(PhysicalType type, ExpressionType comparison, FUN
 	case PhysicalType::INTERVAL:
 		return DispatchComparison<interval_t>(comparison, func);
 	case PhysicalType::VARCHAR:
-		return DispatchComparison<string_t>(comparison, func);
+		if constexpr (STRINGS) {
+			return DispatchComparison<string_t>(comparison, func);
+		} else {
+			throw InternalException("Comparison filter executor has no mask kernel for strings");
+		}
 	default:
 		throw InternalException("Unsupported physical type for comparison filter executor");
 	}
@@ -238,26 +242,27 @@ public:
 	}
 
 	bool FiltersMasks() const override {
-		return !constant.IsNull();
+		return !constant.IsNull() && TypeIsConstantSize(constant.type().InternalType());
 	}
 
 	void FilterMask(Vector &vector, idx_t count, uint64_t *mask) override {
-		D_ASSERT(vector.GetVectorType() == VectorType::FLAT_VECTOR && !constant.IsNull());
-		DispatchComparison(constant.type().InternalType(), comparison_type,
-		                   [&]<class T, class OP>() { MaskFlat<T, OP>(vector, count, mask); });
+		D_ASSERT(vector.GetVectorType() == VectorType::FLAT_VECTOR && FiltersMasks());
+		DispatchComparison<false>(constant.type().InternalType(), comparison_type,
+		                          [&]<class T, class OP>() { MaskFlat<T, OP>(vector, count, mask); });
 	}
 
 private:
 	template <class T, class OP>
 	void MaskFlat(const Vector &vector, idx_t count, uint64_t *mask) const {
-		const auto data = FlatVector::GetData<T>(vector);
+		using STORED = std::conditional_t<std::is_same_v<T, bool>, uint8_t, T>;
+		const auto data = FlatVector::GetData<STORED>(vector);
 		const auto validity = FlatVector::Validity(vector).GetData();
 		const auto predicate = constant.GetValueUnsafe<T>();
 		for (idx_t first = 0; first < count; first += 64) {
 			const auto rows = MinValue<idx_t>(64, count - first);
 			uint64_t bits = 0;
 			for (idx_t j = 0; j < rows; j++) {
-				bits |= uint64_t(OP::Operation(data[first + j], predicate)) << j;
+				bits |= uint64_t(OP::Operation(static_cast<T>(data[first + j]), predicate)) << j;
 			}
 			const auto w = first / 64;
 			mask[w] &= validity ? bits & validity[w] : bits;

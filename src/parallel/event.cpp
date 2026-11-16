@@ -38,6 +38,7 @@ void Event::Finish() {
 		parent->CompleteDependency();
 	}
 	FinalizeFinish();
+	executor.WakeWaiters();
 }
 
 void Event::AddDependency(Event &event) {

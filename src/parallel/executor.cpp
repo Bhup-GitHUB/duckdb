@@ -434,12 +434,26 @@ void Executor::SignalTaskRescheduled(lock_guard<mutex> &) {
 
 void Executor::UnregisterTask() {
 #ifndef DUCKDB_NO_THREADS
+	auto tasks = executor_tasks.load(std::memory_order_relaxed);
+	while (tasks > 1) {
+		if (executor_tasks.compare_exchange_weak(tasks, tasks - 1)) {
+			return;
+		}
+	}
 	const annotated_lock_guard<annotated_mutex> producer_lock(producer->producer_lock);
 	executor_tasks--;
 	producer->epoch++;
 	producer->producer_cv.SignalAll();
 #else
 	executor_tasks--;
+#endif
+}
+
+void Executor::WakeWaiters() {
+#ifndef DUCKDB_NO_THREADS
+	const annotated_lock_guard<annotated_mutex> producer_lock(producer->producer_lock);
+	producer->epoch++;
+	producer->producer_cv.SignalAll();
 #endif
 }
 
@@ -473,7 +487,6 @@ void Executor::WaitForTask(absl::FunctionRef<bool()> is_done) {
 		}
 	}
 	// Nothing to run on this thread, all remaining tasks are either running on other threads or descheduled.
-	// Wait (bounded) until a task of this producer is enqueued, finishes or parks on the result collector.
 	const auto wait_begin = TimePoint::Tick();
 	{
 		TaskScheduler::BlockingScope blocking;
@@ -517,11 +530,7 @@ void Executor::AddToBeRescheduled(shared_ptr<Task> &task_p) {
 	to_be_rescheduled_tasks[task_ref] = std::move(task_p);
 	// Only a result-sink park needs the consumer, so only a store that can park wakes it
 	if (ResultStoreCanPark()) {
-		{
-			const annotated_lock_guard<annotated_mutex> producer_guard(producer->producer_lock);
-			producer->epoch++;
-			producer->producer_cv.SignalAll();
-		}
+		WakeWaiters();
 		if (on_reschedule && ResultCollectorIsBlocked()) {
 			// A streaming result chunk is ready (the collector blocked waiting for Fetch): the next
 			// ExecuteTask will return READY. Wake an async driver parked on NO_TASKS.
@@ -725,6 +734,7 @@ void Executor::PushError(ErrorData exception) {
 	// Wake an async driver parked on NO_TASKS so it re-runs ExecuteTask and observes the error
 	// (the query will not complete, so the completion/result-ready wakes would never fire).
 	NotifyDriver();
+	WakeWaiters();
 }
 
 bool Executor::HasError() {

@@ -133,6 +133,7 @@ public:
 		executor_tasks++;
 	}
 	void UnregisterTask();
+	void WakeWaiters();
 
 	//! Set the buffer of the result this query produces. Called at submission, before execution starts
 	void SetResultBuffer(shared_ptr<BufferedData> result_buffer_p);

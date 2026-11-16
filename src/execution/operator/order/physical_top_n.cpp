@@ -270,9 +270,7 @@ void TopNKeyHeap<SORT_KEY_TYPE>::AddRows(DataChunk &input) {
 
 template <SortKeyType SORT_KEY_TYPE>
 void TopNKeyHeap<SORT_KEY_TYPE>::PublishBoundary(SortKeyBoundary &boundary) {
-	if (heap.empty()) {
-		return;
-	}
+	D_ASSERT(!heap.empty());
 	if (heap.size() >= heap_size) {
 		boundary.Update(KeyBytes(heap.front()));
 	} else if (heap_size > 8 * STANDARD_VECTOR_SIZE && heap.size() >= next_contribution) {
@@ -284,11 +282,9 @@ void TopNKeyHeap<SORT_KEY_TYPE>::PublishBoundary(SortKeyBoundary &boundary) {
 		std::sort(keys.begin(), keys.end());
 		vector<SortKeyBoundary::Quantile> quantiles;
 		quantiles.reserve(QUANTILES);
+		D_ASSERT(keys.size() >= QUANTILES);
 		for (idx_t q = 1; q <= QUANTILES; q++) {
 			const auto rows = (keys.size() * q + QUANTILES - 1) / QUANTILES;
-			if (!quantiles.empty() && quantiles.back().rows == rows) {
-				continue;
-			}
 			const auto bytes = KeyBytes(keys[rows - 1]);
 			quantiles.push_back({string(bytes.GetData(), bytes.GetSize()), rows});
 		}

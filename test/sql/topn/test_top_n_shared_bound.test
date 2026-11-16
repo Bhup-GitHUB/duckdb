@@ -6,24 +6,44 @@ statement ok
 SET threads = 8
 
 statement ok
-CREATE TABLE t AS SELECT (i * 7919) % 1000003 AS x, i % 13 AS y, CASE WHEN i % 101 = 0 THEN NULL ELSE (i * 31) % 999983 END AS z FROM range(2000000) r(i)
-
-query I
-SELECT (SELECT sum(x) FROM (SELECT x FROM t ORDER BY x LIMIT 30000)) = (SELECT sum(x) FROM (SELECT x, row_number() OVER (ORDER BY x) AS rn FROM t) WHERE rn <= 30000)
-----
-true
-
-query I
-SELECT (SELECT sum(x) FROM (SELECT x FROM t ORDER BY x DESC LIMIT 25000 OFFSET 1000)) = (SELECT sum(x) FROM (SELECT x, row_number() OVER (ORDER BY x DESC) AS rn FROM t) WHERE rn > 1000 AND rn <= 26000)
-----
-true
-
-query I
-SELECT (SELECT sum(y * 1000003 + x) FROM (SELECT y, x FROM t ORDER BY y DESC, x LIMIT 40000)) = (SELECT sum(y * 1000003 + x) FROM (SELECT y, x, row_number() OVER (ORDER BY y DESC, x) AS rn FROM t) WHERE rn <= 40000)
-----
-true
+CREATE TABLE t AS SELECT x, x % 13 AS y, CASE WHEN x % 1009 = 0 THEN NULL ELSE x END AS z FROM (SELECT (i * 7919) % 6000000 AS x FROM range(6000000) r(i))
 
 query II
-SELECT count(z), sum(z) = (SELECT sum(z) FROM (SELECT z, row_number() OVER (ORDER BY z NULLS FIRST) AS rn FROM t) WHERE rn <= 30000) FROM (SELECT z FROM t ORDER BY z NULLS FIRST LIMIT 30000)
+EXPLAIN SELECT x FROM t ORDER BY x LIMIT 20000
 ----
-10198	true
+physical_plan	<REGEX>:(?s).*TOP_N.*
+
+query IIII
+SELECT count(*), min(x), max(x), sum(x) FROM (SELECT x FROM t ORDER BY x LIMIT 20000)
+----
+20000	0	19999	199990000
+
+query II
+EXPLAIN SELECT x FROM t ORDER BY x DESC LIMIT 20000 OFFSET 1000
+----
+physical_plan	<REGEX>:(?s).*TOP_N.*
+
+query IIII
+SELECT count(*), min(x), max(x), sum(x) FROM (SELECT x FROM t ORDER BY x DESC LIMIT 20000 OFFSET 1000)
+----
+20000	5979000	5998999	119779990000
+
+query II
+EXPLAIN SELECT y, x FROM t ORDER BY y DESC, x LIMIT 30000
+----
+physical_plan	<REGEX>:(?s).*TOP_N.*
+
+query IIII
+SELECT count(*), min(y), max(x), sum(x) FROM (SELECT y, x FROM t ORDER BY y DESC, x LIMIT 30000)
+----
+30000	12	389999	5850165000
+
+query II
+EXPLAIN SELECT z FROM t ORDER BY z NULLS FIRST LIMIT 20000
+----
+physical_plan	<REGEX>:(?s).*TOP_N.*
+
+query IIII
+SELECT count(*), count(z), max(z), sum(z) FROM (SELECT z FROM t ORDER BY z NULLS FIRST LIMIT 20000)
+----
+20000	14053	14066	98841392

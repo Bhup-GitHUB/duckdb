@@ -249,6 +249,43 @@ EXPLAIN SELECT k, count(*) FROM d GROUP BY k LIMIT 10
 ----
 physical_plan	<REGEX>:.*Dynamic Filter \(k ?<= ?\?\).*
 
+statement ok
+CREATE TABLE fallback AS SELECT i % 2 = 0 AS b, CASE WHEN i < 122880 THEN NULL ELSE i % 1000 END AS k FROM range(3 * 122880) r(i)
+
+query II
+SELECT count(*), bool_and(c = (SELECT count(*) FROM fallback f WHERE f.b = r.b)) FROM (SELECT b, count(*) AS c FROM fallback GROUP BY b LIMIT 1) r
+----
+1	true
+
+query II
+SELECT count(*), bool_and(c = (SELECT count(*) FROM fallback f WHERE f.k IS NOT DISTINCT FROM r.k)) FROM (SELECT k, count(*) AS c FROM fallback GROUP BY k LIMIT 10) r
+----
+10	true
+
+query II
+SELECT count(*), bool_and(c = 1) FROM (SELECT rowid AS id, count(*) AS c FROM fallback GROUP BY rowid LIMIT 10) r
+----
+10	true
+
+query II
+SELECT count(*), bool_and(c = 1) FROM (SELECT range AS v, count(*) AS c FROM range(100000) GROUP BY range LIMIT 10) r
+----
+10	true
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO fallback SELECT i % 3 = 0, i % 50 FROM range(5000) r(i)
+
+query II
+SELECT count(*), bool_and(c = (SELECT count(*) FROM fallback f WHERE f.k IS NOT DISTINCT FROM r.k)) FROM (SELECT k, count(*) AS c FROM fallback GROUP BY k LIMIT 10) r
+----
+10	true
+
+statement ok
+ROLLBACK
+
 query II
 EXPLAIN WITH RECURSIVE q(i, x) AS (SELECT 0, range FROM range(10000) UNION ALL SELECT i + 1, x + 100000 * c FROM (SELECT i, x, count(*) AS c FROM q GROUP BY i, x ORDER BY x LIMIT 100) t WHERE i < 3) SELECT i, count(*), min(x), max(x) FROM q GROUP BY i ORDER BY i
 ----

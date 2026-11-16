@@ -59,6 +59,9 @@ public:
 
 	unique_ptr<SortKeyBoundaryFilter> boundary_filter;
 	SelectionVector boundary_sel;
+	//! This heap's slot among the shared boundary's producers, and the size at which it next reports there
+	idx_t producer = DConstants::INVALID_INDEX;
+	idx_t next_contribution;
 
 public:
 	void Sink(DataChunk &input, optional_ptr<SortKeyBoundary> boundary = nullptr);
@@ -225,7 +228,8 @@ private:
 TopNHeap::TopNHeap(ClientContext &context, const PhysicalTopN &op)
     : allocator(BufferAllocator::Get(context)), payload_types(op.children[0].get().types), orders(op.orders),
       projections(op.projections), limit(op.limit), offset(op.offset), heap_size(op.limit + op.offset),
-      executor(context), matching_sel(STANDARD_VECTOR_SIZE), boundary_sel(STANDARD_VECTOR_SIZE) {
+      executor(context), matching_sel(STANDARD_VECTOR_SIZE), boundary_sel(STANDARD_VECTOR_SIZE),
+      next_contribution(MaxValue<idx_t>(heap_size / 16, 1)) {
 	// initialize the executor and the sort_chunk
 	vector<LogicalType> sort_types;
 	for (auto &order : orders) {
@@ -266,9 +270,30 @@ void TopNKeyHeap<SORT_KEY_TYPE>::AddRows(DataChunk &input) {
 
 template <SortKeyType SORT_KEY_TYPE>
 void TopNKeyHeap<SORT_KEY_TYPE>::PublishBoundary(SortKeyBoundary &boundary) {
-	// note that the global boundary only applies to FULL heaps
-	if (!heap.empty() && heap.size() >= heap_size) {
+	if (heap.empty()) {
+		return;
+	}
+	if (heap.size() >= heap_size) {
 		boundary.Update(KeyBytes(heap.front()));
+	} else if (heap_size > 8 * STANDARD_VECTOR_SIZE && heap.size() >= next_contribution) {
+		if (producer == DConstants::INVALID_INDEX) {
+			producer = boundary.NewProducer();
+		}
+		static constexpr idx_t QUANTILES = 8;
+		vector<SORT_KEY> keys(heap.begin(), heap.end());
+		std::sort(keys.begin(), keys.end());
+		vector<SortKeyBoundary::Quantile> quantiles;
+		quantiles.reserve(QUANTILES);
+		for (idx_t q = 1; q <= QUANTILES; q++) {
+			const auto rows = (keys.size() * q + QUANTILES - 1) / QUANTILES;
+			if (!quantiles.empty() && quantiles.back().rows == rows) {
+				continue;
+			}
+			const auto bytes = KeyBytes(keys[rows - 1]);
+			quantiles.push_back({string(bytes.GetData(), bytes.GetSize()), rows});
+		}
+		boundary.Contribute(producer, std::move(quantiles), heap_size);
+		next_contribution = heap.size() * 2;
 	}
 }
 

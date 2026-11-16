@@ -27,12 +27,22 @@ public:
 	}
 	bool Get(string &result) const;
 	bool Update(string_t key);
+	struct Quantile {
+		string key;
+		idx_t rows;
+	};
+	void Contribute(idx_t producer, vector<Quantile> quantiles, idx_t limit);
+	idx_t NewProducer() {
+		return producers.fetch_add(1, std::memory_order_relaxed);
+	}
 	void Reset();
 
 private:
 	mutable annotated_mutex lock;
 	string key DUCKDB_GUARDED_BY(lock);
 	bool is_set DUCKDB_GUARDED_BY(lock) = false;
+	vector<vector<Quantile>> reports DUCKDB_GUARDED_BY(lock);
+	atomic<idx_t> producers {0};
 	atomic<idx_t> version {0};
 	const shared_ptr<DynamicFilterData> dynamic_filter;
 	const OrderModifiers first_modifiers;

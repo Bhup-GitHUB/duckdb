@@ -1,0 +1,29 @@
+# name: test/sql/topn/test_top_n_shared_bound.test
+# description: a Top-N whose limit takes many vectors to fill bounds its input from all threads' partial heaps, and still returns exactly its rows
+# group: [topn]
+
+statement ok
+SET threads = 8
+
+statement ok
+CREATE TABLE t AS SELECT (i * 7919) % 1000003 AS x, i % 13 AS y, CASE WHEN i % 101 = 0 THEN NULL ELSE (i * 31) % 999983 END AS z FROM range(2000000) r(i)
+
+query I
+SELECT (SELECT sum(x) FROM (SELECT x FROM t ORDER BY x LIMIT 30000)) = (SELECT sum(x) FROM (SELECT x, row_number() OVER (ORDER BY x) AS rn FROM t) WHERE rn <= 30000)
+----
+true
+
+query I
+SELECT (SELECT sum(x) FROM (SELECT x FROM t ORDER BY x DESC LIMIT 25000 OFFSET 1000)) = (SELECT sum(x) FROM (SELECT x, row_number() OVER (ORDER BY x DESC) AS rn FROM t) WHERE rn > 1000 AND rn <= 26000)
+----
+true
+
+query I
+SELECT (SELECT sum(y * 1000003 + x) FROM (SELECT y, x FROM t ORDER BY y DESC, x LIMIT 40000)) = (SELECT sum(y * 1000003 + x) FROM (SELECT y, x, row_number() OVER (ORDER BY y DESC, x) AS rn FROM t) WHERE rn <= 40000)
+----
+true
+
+query II
+SELECT count(z), sum(z) = (SELECT sum(z) FROM (SELECT z, row_number() OVER (ORDER BY z NULLS FIRST) AS rn FROM t) WHERE rn <= 30000) FROM (SELECT z FROM t ORDER BY z NULLS FIRST LIMIT 30000)
+----
+10198	true

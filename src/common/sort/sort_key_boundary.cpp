@@ -45,10 +45,55 @@ bool SortKeyBoundary::Update(string_t new_key) {
 	return true;
 }
 
+void SortKeyBoundary::Contribute(idx_t producer, vector<Quantile> quantiles, idx_t limit) {
+	string bound;
+	{
+		const annotated_lock_guard<annotated_mutex> guard {lock};
+		if (producer >= reports.size()) {
+			reports.resize(producer + 1);
+		}
+		reports[producer] = std::move(quantiles);
+		struct Point {
+			const Quantile *quantile;
+			idx_t producer;
+		};
+		vector<Point> points;
+		idx_t total = 0;
+		for (idx_t p = 0; p < reports.size(); p++) {
+			for (auto &quantile : reports[p]) {
+				points.push_back({&quantile, p});
+			}
+			if (!reports[p].empty()) {
+				total += reports[p].back().rows;
+			}
+		}
+		if (total < limit) {
+			return;
+		}
+		std::sort(points.begin(), points.end(),
+		          [](const Point &l, const Point &r) { return l.quantile->key < r.quantile->key; });
+		vector<idx_t> counted(reports.size(), 0);
+		total = 0;
+		for (auto &point : points) {
+			total += point.quantile->rows - counted[point.producer];
+			counted[point.producer] = point.quantile->rows;
+			if (total >= limit) {
+				if (is_set && !(point.quantile->key < key)) {
+					return;
+				}
+				bound = point.quantile->key;
+				break;
+			}
+		}
+	}
+	Update(string_t(bound));
+}
+
 void SortKeyBoundary::Reset() {
 	const annotated_lock_guard<annotated_mutex> guard {lock};
 	key.clear();
 	is_set = false;
+	reports.clear();
 	dynamic_value = Value();
 	version.store(version.load(std::memory_order_relaxed) + 1, std::memory_order_release);
 	if (dynamic_filter) {

@@ -1054,13 +1054,21 @@ void ClientContext::SuppressInterrupts() {
 	interrupt_state = ClientInterruptState::INTERRUPTS_SUPPRESSED;
 }
 
+static bool DeadlinePassed(const optional_idx &deadline) {
+	return deadline.IsValid() && static_cast<idx_t>(TimePoint::Now()) >= deadline.GetIndex();
+}
+
 void ClientContext::InterruptCheck() const {
-	if (interrupt_state.load(std::memory_order_relaxed) == ClientInterruptState::INTERRUPTED) {
+	if (IsInterrupted()) {
 		throw InterruptException();
 	}
-	if (query_deadline.IsValid() && static_cast<idx_t>(TimePoint::Now()) >= query_deadline.GetIndex()) {
+	if (DeadlinePassed(query_deadline)) {
 		throw InterruptException("Query exceeded maximum execution time");
 	}
+}
+
+bool ClientContext::InterruptPending() const {
+	return IsInterrupted() || DeadlinePassed(query_deadline);
 }
 
 void ClientContext::CancelTransaction() {

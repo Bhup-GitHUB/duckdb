@@ -188,6 +188,8 @@ public:
 
 	//! Check for interrupt or timeout, throws InterruptException if triggered
 	DUCKDB_API void InterruptCheck() const;
+	//! Whether InterruptCheck would throw
+	DUCKDB_API bool InterruptPending() const;
 
 	template <typename F>
 	void Await(const F &condition) {

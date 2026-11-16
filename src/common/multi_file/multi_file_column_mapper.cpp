@@ -129,11 +129,12 @@ struct FieldIdMapper : public ColumnMapper {
 		auto expr = default_val->Copy();
 		LogicalType target_type = column.type;
 		auto bound = constant_binder.Bind(expr, &target_type);
-		if (!bound->IsFoldable()) {
+		Value folded;
+		if (!bound->IsFoldable() || !ExpressionExecutor::TryEvaluateFoldable(context, *bound, folded)) {
 			return bound;
 		}
 		// a constant default is kept as a constant so filters on the missing column can be evaluated up front
-		return make_uniq<BoundConstantExpression>(ExpressionExecutor::EvaluateScalar(context, *bound, true));
+		return make_uniq<BoundConstantExpression>(std::move(folded));
 	}
 
 	unique_ptr<Expression> GetDefaultExpression(ClientContext &context, const MultiFileColumnDefinition &column,

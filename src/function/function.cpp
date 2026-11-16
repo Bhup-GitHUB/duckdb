@@ -633,7 +633,7 @@ optional<Value> BindFunctionInput::TryGetConstant(idx_t arg_idx) const {
 		return {};
 	}
 	Value result;
-	if (!ExpressionExecutor::TryEvaluateScalar(context, expr, result)) {
+	if (!ExpressionExecutor::TryEvaluateFoldable(context, expr, result)) {
 		return {};
 	}
 	return result;

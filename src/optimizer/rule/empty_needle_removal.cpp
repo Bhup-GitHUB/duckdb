@@ -18,7 +18,7 @@ static bool IsEmptyString(ClientContext &context, Expression &expr) {
 		return false;
 	}
 	Value value;
-	return ExpressionExecutor::TryEvaluateScalar(context, expr, value) && !value.IsNull() &&
+	return ExpressionExecutor::TryEvaluateFoldable(context, expr, value) && !value.IsNull() &&
 	       value.type().id() == LogicalTypeId::VARCHAR && StringValue::Get(value).empty();
 }
 
@@ -84,7 +84,7 @@ unique_ptr<Expression> EmptyNeedleRemovalRule::Apply(LogicalOperator &op, vector
 	D_ASSERT(root.GetReturnType().id() == LogicalTypeId::BOOLEAN);
 
 	Value prefix_value;
-	if (!ExpressionExecutor::TryEvaluateScalar(GetContext(), prefix_expr, prefix_value)) {
+	if (!ExpressionExecutor::TryEvaluateFoldable(GetContext(), prefix_expr, prefix_value)) {
 		return nullptr;
 	}
 
@@ -130,8 +130,8 @@ unique_ptr<Expression> NoopReplaceRemovalRule::Apply(LogicalOperator &op, vector
 
 	Value needle;
 	Value replacement;
-	if (!ExpressionExecutor::TryEvaluateScalar(GetContext(), needle_expr, needle) ||
-	    !ExpressionExecutor::TryEvaluateScalar(GetContext(), replacement_expr, replacement)) {
+	if (!ExpressionExecutor::TryEvaluateFoldable(GetContext(), needle_expr, needle) ||
+	    !ExpressionExecutor::TryEvaluateFoldable(GetContext(), replacement_expr, replacement)) {
 		return nullptr;
 	}
 	if (needle.IsNull() || replacement.IsNull() || needle.type().id() != LogicalTypeId::VARCHAR ||

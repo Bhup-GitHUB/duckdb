@@ -195,7 +195,7 @@ static bool TryFoldNestedValue(ClientContext &context, const Expression &expr, V
 		}
 		Value value;
 		if (child->GetReturnType().IsNested() || !child->IsFoldable() ||
-		    !ExpressionExecutor::TryEvaluateScalar(context, *child, value)) {
+		    !ExpressionExecutor::TryEvaluateFoldable(context, *child, value)) {
 			return false;
 		}
 		values.push_back(std::move(value));
@@ -289,19 +289,6 @@ Value ExpressionExecutor::EvaluateScalar(ClientContext &context, const Expressio
 	auto result_value = result.GetValue(0);
 	D_ASSERT(result_value.type().InternalType() == expr.GetReturnType().InternalType());
 	return result_value.WithType(expr.GetReturnType());
-}
-
-bool ExpressionExecutor::TryEvaluateScalar(ClientContext &context, const Expression &expr, Value &result) {
-	try {
-		result = EvaluateScalar(context, expr);
-		return true;
-	} catch (InternalException &ex) {
-		throw;
-	} catch (InterruptException &ex) {
-		throw;
-	} catch (...) {
-		return false;
-	}
 }
 
 static idx_t FoldedValueSize(const Vector &vector, idx_t count, idx_t max_size) {

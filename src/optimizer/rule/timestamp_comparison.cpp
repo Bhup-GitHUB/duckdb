@@ -85,7 +85,7 @@ unique_ptr<Expression> TimeStampComparison::Apply(LogicalOperator &op, vector<re
 	auto new_expr = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 
 	Value result;
-	if (ExpressionExecutor::TryEvaluateScalar(context, *cast_constant, result)) {
+	if (ExpressionExecutor::TryEvaluateFoldable(context, *cast_constant, result)) {
 		D_ASSERT(result.type() == LogicalType::DATE);
 		auto original_val = result.GetValue<duckdb::date_t>();
 		auto no_seconds = dtime_t(0);

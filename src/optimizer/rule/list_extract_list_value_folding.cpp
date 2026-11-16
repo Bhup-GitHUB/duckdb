@@ -30,7 +30,7 @@ unique_ptr<Expression> ListExtractListValueFoldingRule::Apply(LogicalOperator &o
 		return nullptr;
 	}
 	Value index;
-	if (!ExpressionExecutor::TryEvaluateScalar(GetContext(), index_expr, index) || index.IsNull() ||
+	if (!ExpressionExecutor::TryEvaluateFoldable(GetContext(), index_expr, index) || index.IsNull() ||
 	    index.type().id() != LogicalTypeId::BIGINT) {
 		return nullptr;
 	}

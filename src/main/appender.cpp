@@ -553,7 +553,8 @@ Appender::Appender(Connection &con, const Identifier &database_name, const Ident
 			}
 
 			Value result_value;
-			auto eval_success = ExpressionExecutor::TryEvaluateScalar(context_ref, *bound_default, result_value);
+			auto eval_success = ExpressionExecutor::TryEvaluateFoldable(context_ref, *bound_default, result_value,
+			                                                            NumericLimits<idx_t>::Maximum());
 			// Insert the default Value.
 			if (eval_success) {
 				default_values[i] = result_value;

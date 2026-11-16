@@ -820,7 +820,7 @@ ExpressionCanThrowOnNullInput(ClientContext &context, const Expression &expr,
 		// CanThrow is conservative for foldable children such as implicit constant casts.
 		Value constant_value;
 		if (child.IsConsistent() && child.IsFoldable() &&
-		    ExpressionExecutor::TryEvaluateScalar(context, child, constant_value)) {
+		    ExpressionExecutor::TryEvaluateFoldable(context, child, constant_value)) {
 			return;
 		}
 		if (!ExpressionBecomesNull(child, column_becomes_null) ||

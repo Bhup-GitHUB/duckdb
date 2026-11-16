@@ -84,7 +84,7 @@ static bool CanEliminate(ClientContext &context, JoinType type, unique_ptr<Expre
 	}
 
 	Value result;
-	if (!ExpressionExecutor::TryEvaluateScalar(context, *expr, result)) {
+	if (!ExpressionExecutor::TryEvaluateFoldable(context, *expr, result)) {
 		return false;
 	}
 

@@ -97,7 +97,7 @@ static bool FilterRemovesNull(ClientContext &context, ExpressionRewriter &rewrit
 		}
 		// we flattened the result into a scalar, check if it is FALSE or NULL
 		Value val;
-		if (!ExpressionExecutor::TryEvaluateScalar(context, *filter->expressions[i], val)) {
+		if (!ExpressionExecutor::TryEvaluateFoldable(context, *filter->expressions[i], val)) {
 			return false;
 		}
 		val = val.DefaultCastAs(LogicalType::BOOLEAN);

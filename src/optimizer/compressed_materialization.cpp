@@ -201,7 +201,7 @@ Value CMHelper::GetIntegralRangeValue(ClientContext &context, const LogicalType 
 	auto sub = SubtractFunction::GetFunction(type, type).Bind(context, std::move(arguments));
 
 	Value result;
-	if (ExpressionExecutor::TryEvaluateScalar(context, *sub, result)) {
+	if (ExpressionExecutor::TryEvaluateFoldable(context, *sub, result)) {
 		return result;
 	}
 	// Couldn't evaluate: Return max uhugeint as range so GetIntegralCompress will return nullptr

@@ -1034,7 +1034,7 @@ FilterPushdownResult FilterCombiner::TryPushdownTemporalCastFilter(TableFilterSe
 	// evaluate the constant side
 	Value constant_value;
 	string error_msg;
-	if (!ExpressionExecutor::TryEvaluateScalar(context, const_side, constant_value)) {
+	if (!ExpressionExecutor::TryEvaluateFoldable(context, const_side, constant_value)) {
 		return FilterPushdownResult::NO_PUSHDOWN;
 	}
 	if (constant_value.IsNull()) {
@@ -1239,7 +1239,7 @@ FilterResult FilterCombiner::AddFilter(Expression &expr) {
 	if (expr.IsFoldable()) {
 		// scalar condition, evaluate it
 		Value result;
-		if (!ExpressionExecutor::TryEvaluateScalar(context, expr, result)) {
+		if (!ExpressionExecutor::TryEvaluateFoldable(context, expr, result)) {
 			return FilterResult::UNSUPPORTED;
 		}
 		result = result.DefaultCastAs(LogicalType::BOOLEAN);

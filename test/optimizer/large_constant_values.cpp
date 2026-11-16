@@ -2,6 +2,13 @@
 #include "test_helpers.hpp"
 
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/optimizer/remote_pushdown_optimizer.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/parsed_expression_iterator.hpp"
+#include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/query_node/select_node.hpp"
+#include "duckdb/parser/statement/select_statement.hpp"
+#include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
@@ -106,6 +113,32 @@ TEST_CASE("A repeated constant macro argument becomes a literal only when it is 
 	auto result = con.Query("SELECT twice_len(range(1000000)), either_len(false, range(10000))");
 	REQUIRE(CHECK_COLUMN(result, 0, {Value::BIGINT(2000000)}));
 	REQUIRE(CHECK_COLUMN(result, 1, {Value::BIGINT(-10000)}));
+}
+
+TEST_CASE("Remote pushdown folds a constant into a literal only when it is small", "[optimizer]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	Parser parser(*con.context);
+	parser.ParseQuery("SELECT range(3)[i + 1], range(1000000)[i + 1] FROM range(3) t(i)");
+	REQUIRE(parser.statements.size() == 1);
+	auto &statement = parser.statements[0];
+	vector<string> list_arguments;
+	con.context->RunFunctionInTransaction([&]() {
+		auto binder = Binder::CreateBinder(*con.context);
+		RemotePushdownOptimizer pushdown(*binder);
+		pushdown.Rewrite(statement);
+		for (auto &expr : statement->Cast<SelectStatement>().node->Cast<SelectNode>().select_list) {
+			bool first = true;
+			ParsedExpressionIterator::EnumerateChildren(*expr, [&](const ParsedExpression &child) {
+				if (first) {
+					list_arguments.push_back(child.Cast<FunctionExpression>().FunctionName().GetIdentifierName());
+					first = false;
+				}
+			});
+		}
+		pushdown.RevertUnshippedFolds();
+	});
+	REQUIRE(list_arguments == vector<string> {"list_value", "range"});
 }
 
 TEST_CASE("Kernels that build one huge value stop at the query deadline", "[optimizer]") {

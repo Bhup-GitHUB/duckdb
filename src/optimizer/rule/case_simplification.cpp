@@ -20,7 +20,7 @@ unique_ptr<Expression> CaseSimplificationRule::Apply(LogicalOperator &op, vector
 			// the WHEN check is a foldable expression
 			// use an ExpressionExecutor to execute the expression
 			Value constant_value;
-			if (!ExpressionExecutor::TryEvaluateScalar(GetContext(), *case_check.when_expr, constant_value)) {
+			if (!ExpressionExecutor::TryEvaluateFoldable(GetContext(), *case_check.when_expr, constant_value)) {
 				continue;
 			}
 

@@ -72,7 +72,7 @@ static bool EvalFunc(ClientContext &context, const BoundFunctionExpression &func
 	auto clone = func.Copy();
 	auto &clone_func = clone->Cast<BoundFunctionExpression>();
 	clone_func.GetChildrenMutable()[0] = make_uniq<BoundConstantExpression>(Value::Numeric(col_type, i));
-	return ExpressionExecutor::TryEvaluateScalar(context, clone_func, out) && !out.IsNull();
+	return ExpressionExecutor::TryEvaluateFoldable(context, clone_func, out) && !out.IsNull();
 }
 
 //! Midpoint of [l, h] (l <= h) that never overflows, even on the full int64 domain where l + h or
@@ -184,7 +184,7 @@ unique_ptr<Expression> MonotonePreimageRule::Apply(LogicalOperator &op, vector<r
 
 	// evaluate the constant and cast it to the function's return type for the corner comparisons
 	Value c;
-	if (!ExpressionExecutor::TryEvaluateScalar(GetContext(), constant_expr, c) || c.IsNull()) {
+	if (!ExpressionExecutor::TryEvaluateFoldable(GetContext(), constant_expr, c) || c.IsNull()) {
 		return nullptr;
 	}
 	if (c.type() != func.GetReturnType()) {

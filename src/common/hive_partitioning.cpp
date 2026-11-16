@@ -209,7 +209,7 @@ void HivePartitioning::ApplyFiltersToFileList(ClientContext &context, vector<Ope
 			Value result_value;
 
 			if (!filter_copy->IsScalar() || !filter_copy->IsFoldable() ||
-			    !ExpressionExecutor::TryEvaluateScalar(context, *filter_copy, result_value)) {
+			    !ExpressionExecutor::TryEvaluateFoldable(context, *filter_copy, result_value)) {
 				// can not be evaluated only with the filename/hive columns added, we can not prune this filter
 				if (!have_preserved_filter[j]) {
 					pruned_filters.emplace_back(filter->Copy());

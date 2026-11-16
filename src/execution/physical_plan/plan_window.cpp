@@ -30,7 +30,7 @@ bool HasDegenerateFrameCase1(ClientContext &client, BoundWindowExpression &wexpr
 		return false;
 	}
 	Value start_val;
-	if (!ExpressionExecutor::TryEvaluateScalar(client, *start_expr, start_val) || start_val.GetValue<int64_t>()) {
+	if (!ExpressionExecutor::TryEvaluateFoldable(client, *start_expr, start_val) || start_val.GetValue<int64_t>()) {
 		return false;
 	}
 
@@ -39,7 +39,7 @@ bool HasDegenerateFrameCase1(ClientContext &client, BoundWindowExpression &wexpr
 		return false;
 	}
 	Value end_val;
-	if (!ExpressionExecutor::TryEvaluateScalar(client, *end_expr, end_val) || end_val.GetValue<int64_t>()) {
+	if (!ExpressionExecutor::TryEvaluateFoldable(client, *end_expr, end_val) || end_val.GetValue<int64_t>()) {
 		return false;
 	}
 

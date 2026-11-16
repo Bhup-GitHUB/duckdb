@@ -358,7 +358,7 @@ unique_ptr<Expression> DateTruncSimplificationRule::CreateTrunc(const BoundConst
 
 	if (trunc->IsFoldable()) {
 		Value result;
-		if (!ExpressionExecutor::TryEvaluateScalar(rewriter.context, *trunc, result)) {
+		if (!ExpressionExecutor::TryEvaluateFoldable(rewriter.context, *trunc, result)) {
 			return trunc;
 		}
 
@@ -409,7 +409,7 @@ unique_ptr<Expression> DateTruncSimplificationRule::CreateTruncAdd(const BoundCo
 
 	if (trunc->IsFoldable()) {
 		Value result;
-		if (!ExpressionExecutor::TryEvaluateScalar(rewriter.context, *trunc, result)) {
+		if (!ExpressionExecutor::TryEvaluateFoldable(rewriter.context, *trunc, result)) {
 			return trunc;
 		}
 
@@ -430,10 +430,10 @@ bool DateTruncSimplificationRule::DateIsTruncated(const BoundConstantExpression 
 	auto trunc = CreateTrunc(date_part, rhs, rhs.GetReturnType());
 
 	Value trunc_result, result;
-	if (!ExpressionExecutor::TryEvaluateScalar(rewriter.context, *trunc, trunc_result)) {
+	if (!ExpressionExecutor::TryEvaluateFoldable(rewriter.context, *trunc, trunc_result)) {
 		return false;
 	}
-	if (!ExpressionExecutor::TryEvaluateScalar(rewriter.context, rhs, result)) {
+	if (!ExpressionExecutor::TryEvaluateFoldable(rewriter.context, rhs, result)) {
 		return false;
 	}
 
@@ -471,7 +471,7 @@ unique_ptr<Expression> DateTruncSimplificationRule::CastAndEvaluate(unique_ptr<E
 	auto cast = BoundCastExpression::AddDefaultCastToType(std::move(rhs), return_type, true);
 	if (cast->IsFoldable()) {
 		Value result;
-		if (!ExpressionExecutor::TryEvaluateScalar(rewriter.context, *cast, result)) {
+		if (!ExpressionExecutor::TryEvaluateFoldable(rewriter.context, *cast, result)) {
 			return cast;
 		}
 

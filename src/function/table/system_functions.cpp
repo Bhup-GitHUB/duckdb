@@ -88,7 +88,7 @@ DuckDBSystemIncludeHiddenBindData::DatabaseFilter(ClientContext &context) const 
 			auto substituted = filter->Copy();
 			SubstituteDatabaseName(substituted, database_column, name);
 			Value result;
-			if (ExpressionExecutor::TryEvaluateScalar(context, *substituted, result) &&
+			if (ExpressionExecutor::TryEvaluateFoldable(context, *substituted, result) &&
 			    (result.IsNull() || !result.GetValue<bool>())) {
 				return false;
 			}

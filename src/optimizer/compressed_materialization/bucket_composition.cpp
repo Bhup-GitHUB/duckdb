@@ -48,7 +48,7 @@ bool TryFoldConstant(ClientContext &context, const Expression &expr, Value &valu
 		return true;
 	}
 	return expr.IsFoldable() && expr.GetExpressionClass() != ExpressionClass::BOUND_LAMBDA &&
-	       ExpressionExecutor::TryEvaluateScalar(context, expr, value);
+	       ExpressionExecutor::TryEvaluateFoldable(context, expr, value);
 }
 
 unique_ptr<Expression> &BucketRewriteInput(Expression &group, idx_t index) {
@@ -237,7 +237,7 @@ private:
 		unique_ptr<Expression> constant = make_uniq<BoundConstantExpression>(bound);
 		auto evaluated = ReplaceColumn(expr->Copy(), constant);
 		Value value;
-		if (!evaluated->IsFoldable() || !ExpressionExecutor::TryEvaluateScalar(context, *evaluated, value) ||
+		if (!evaluated->IsFoldable() || !ExpressionExecutor::TryEvaluateFoldable(context, *evaluated, value) ||
 		    value.IsNull()) {
 			return false;
 		}

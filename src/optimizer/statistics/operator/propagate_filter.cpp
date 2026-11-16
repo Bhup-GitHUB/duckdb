@@ -22,7 +22,7 @@ bool StatisticsPropagator::ExpressionIsConstant(Expression &expr, const Value &v
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
 		expr_value = expr.Cast<BoundConstantExpression>().GetValue();
 	} else if (expr.IsFoldable()) {
-		if (!ExpressionExecutor::TryEvaluateScalar(context, expr, expr_value)) {
+		if (!ExpressionExecutor::TryEvaluateFoldable(context, expr, expr_value)) {
 			return false;
 		}
 	} else {

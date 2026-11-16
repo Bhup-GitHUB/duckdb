@@ -1194,7 +1194,12 @@ RemotePushdownOptimizer::TryConstantFold(unique_ptr<ParsedExpression> &expr) {
 		binder.SetAlwaysRequireRebind();
 	}
 	Value fold_result;
-	if (!ExpressionExecutor::TryEvaluateScalar(binder.context, *bound_expr, fold_result)) {
+	switch (ExpressionExecutor::EvaluateFoldable(binder.context, *bound_expr, fold_result)) {
+	case ExpressionExecutor::FoldResult::FOLDED:
+		break;
+	case ExpressionExecutor::FoldResult::TOO_LARGE:
+		return ConstantFoldResult::NOT_FOLDABLE;
+	case ExpressionExecutor::FoldResult::THROWS:
 		// evaluating the expression raises an error (e.g. an out-of-range error)
 		return ConstantFoldResult::FOLD_ERROR;
 	}

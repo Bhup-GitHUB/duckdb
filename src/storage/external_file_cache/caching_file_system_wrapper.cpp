@@ -110,6 +110,14 @@ void CachingFileSystemWrapper::FileSync(FileHandle &handle) {
 	                              "CachingFileSystemWrapper is a read-only caching filesystem.");
 }
 
+void CachingFileSystemWrapper::SyncDirectory(const string &directory, optional_ptr<FileOpener> opener) {
+	underlying_file_system.SyncDirectory(directory, opener);
+}
+
+void CachingFileSystemWrapper::SyncFile(const string &path, optional_ptr<FileOpener> opener) {
+	underlying_file_system.SyncFile(path, opener);
+}
+
 //===----------------------------------------------------------------------===//
 // OpenFile Operations
 //===----------------------------------------------------------------------===//

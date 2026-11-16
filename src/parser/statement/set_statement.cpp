@@ -1,5 +1,9 @@
 #include "duckdb/parser/statement/set_statement.hpp"
+
+#include "duckdb/catalog/catalog_search_path.hpp"
 #include "duckdb/common/enum_util.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/keyword_helper.hpp"
 
 namespace duckdb {
 
@@ -38,8 +42,28 @@ static string ScopeToString(SetScope scope) {
 	}
 }
 
+static string ScopePrefix(SetScope scope) {
+	auto result = ScopeToString(scope);
+	return result.empty() ? result : result + " ";
+}
+
+static bool IsSearchPathList(const Identifier &name, const ParsedExpression &value) {
+	if (name != "search_path" || value.GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
+		return false;
+	}
+	auto &literal = value.Cast<ConstantExpression>().GetLiteral();
+	return literal.kind == LiteralKind::STRING && !literal.text.empty();
+}
+
 string SetVariableStatement::ToString() const {
-	return StringUtil::Format("SET %s %s TO %s;", ScopeToString(scope), name, value->ToString());
+	auto result = "SET " + ScopePrefix(scope) + SQLIdentifier::ToString(name) + " TO ";
+	if (IsSearchPathList(name, *value)) {
+		result += CatalogSearchEntry::ListToString(
+		    CatalogSearchEntry::ParseList(value->Cast<ConstantExpression>().GetLiteral().text));
+	} else {
+		result += value->ToString();
+	}
+	return result + ";";
 }
 
 // Reset Variable
@@ -53,12 +77,7 @@ unique_ptr<SQLStatement> ResetVariableStatement::Copy() const {
 }
 
 string ResetVariableStatement::ToString() const {
-	string result = "";
-	result += "RESET";
-	result += " " + ScopeToString(scope);
-	result += " " + name;
-	result += ";";
-	return result;
+	return "RESET " + ScopePrefix(scope) + (name.empty() ? "ALL" : SQLIdentifier::ToString(name)) + ";";
 }
 
 } // namespace duckdb

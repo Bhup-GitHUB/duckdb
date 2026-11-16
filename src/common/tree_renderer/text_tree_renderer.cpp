@@ -301,6 +301,7 @@ struct ExplainTreeNode;
 struct ExplainDetail {
 	string key;
 	vector<string> values;
+	bool timing = false;
 	unique_ptr<ExplainTreeNode> subtree;
 	//! subtree lines are rendered lazily by the box renderer and cached here (width incl.)
 	mutable vector<ExplainLine> subtree_lines;
@@ -501,6 +502,7 @@ static unique_ptr<ExplainTreeNode> BuildExplainTree(RenderTree &tree, idx_t x, i
 		ExplainDetail detail;
 		detail.key = std::move(display_key);
 		detail.values = std::move(values);
+		detail.timing = value.IsTiming();
 		node->details.push_back(std::move(detail));
 	}
 	for (auto &child_pos : render_node.child_positions) {
@@ -520,11 +522,16 @@ static double SumOperatorTimings(const ExplainTreeNode &node) {
 	return total;
 }
 
-//! Zero every operator's timing (used by the "deterministic" renderer setting so per-op times and the
-//! derived total render as 0µs / 0.0000s, making EXPLAIN ANALYZE output byte-stable in tests).
+//! Zero every operator's timing and timing details (used by the "deterministic" renderer setting so per-op
+//! times and the derived total render as 0µs / 0.0000s, making EXPLAIN ANALYZE output byte-stable in tests).
 static void ZeroOperatorTimings(ExplainTreeNode &node) {
 	if (node.timing > 0) {
 		node.timing = 0;
+	}
+	for (auto &detail : node.details) {
+		if (detail.timing) {
+			detail.values = {StringUtil::FormatTiming(0)};
+		}
 	}
 	for (auto &child : node.children) {
 		ZeroOperatorTimings(*child);

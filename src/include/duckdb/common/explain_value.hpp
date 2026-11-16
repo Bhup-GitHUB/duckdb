@@ -41,8 +41,14 @@ public:
 	explicit ExplainValue(ExplainNode node) : structured(make_shared_ptr<ExplainNode>(std::move(node))) {
 	}
 
+	//! A duration, formatted like an operator's timing; deterministic renderers print it as zero
+	static ExplainValue Timing(double seconds);
+
 	bool IsStructured() const {
 		return structured != nullptr;
+	}
+	bool IsTiming() const {
+		return timing;
 	}
 	const string &Scalar() const {
 		return scalar;
@@ -59,6 +65,7 @@ public:
 private:
 	string scalar;
 	shared_ptr<ExplainNode> structured;
+	bool timing = false;
 };
 
 } // namespace duckdb

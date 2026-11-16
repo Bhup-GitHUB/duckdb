@@ -4,7 +4,6 @@
 #include "duckdb/storage/arena_allocator.hpp"
 #include "duckdb/common/operator/multiply.hpp"
 #include "duckdb/common/algorithm.hpp"
-#include "duckdb/common/bswap.hpp"
 #include "duckdb/common/operator/comparison_operators.hpp"
 #include "duckdb/common/pair.hpp"
 #include "duckdb/common/types/string_type.hpp"
@@ -32,87 +31,21 @@ struct HeapEntry {
 	}
 };
 
+// For strings that require arena allocation
 template <>
-struct HeapEntry<string_t>;
-
-inline string_t StoreArenaString(ArenaAllocator &allocator, const string_t &new_val, uint32_t &capacity,
-                                 data_ptr_t &allocated_data) {
-	if (new_val.IsInlined()) {
-		return new_val;
-	}
-
-	// Short path for first assignment
-	if (allocated_data == nullptr) {
-		auto new_size = UnsafeNumericCast<uint32_t>(new_val.GetSize());
-		auto new_capacity = NextPowerOfTwo(new_size);
-		if (new_capacity > string_t::MAX_STRING_SIZE) {
-			throw ObjectSizeException("Resulting string/blob too large!");
-		}
-		capacity = UnsafeNumericCast<uint32_t>(new_capacity);
-		allocated_data = allocator.Allocate(capacity);
-		memcpy(allocated_data, new_val.GetData(), new_size);
-		return string_t(const_char_ptr_cast(allocated_data), new_size);
-	}
-
-	// double allocation until value fits
-	if (capacity < new_val.GetSize()) {
-		auto old_size = capacity;
-		auto new_size = UnsafeNumericCast<uint32_t>(new_val.GetSize());
-		auto new_capacity = NextPowerOfTwo(new_size);
-		if (new_capacity > string_t::MAX_STRING_SIZE) {
-			throw ObjectSizeException("Resulting string/blob too large!");
-		}
-		do {
-			capacity *= 2;
-		} while (capacity < new_val.GetSize());
-		allocated_data = allocator.Reallocate(allocated_data, old_size, capacity);
-	}
-	auto new_size = UnsafeNumericCast<uint32_t>(new_val.GetSize());
-	memcpy(allocated_data, new_val.GetData(), new_size);
-	return string_t(const_char_ptr_cast(allocated_data), new_size);
-}
-
-struct PrefixedString {
-	uint64_t high;
-	uint64_t low;
+struct HeapEntry<string_t> {
 	string_t value;
-
-	static PrefixedString Make(const string_t &value) {
-		uint64_t words[2] = {0, 0};
-		memcpy(words, value.GetData(), MinValue<idx_t>(value.GetSize(), sizeof(words)));
-		return PrefixedString {BSwapIfLE(words[0]), BSwapIfLE(words[1]), value};
-	}
-
-	friend bool operator>(const PrefixedString &left, const PrefixedString &right) {
-		if (left.high != right.high) {
-			return left.high > right.high;
-		}
-		if (left.low != right.low) {
-			return left.low > right.low;
-		}
-		const auto left_size = left.value.GetSize();
-		const auto right_size = right.value.GetSize();
-		const auto common = MinValue(left_size, right_size);
-		if (common > sizeof(uint64_t) * 2) {
-			const auto skip = sizeof(uint64_t) * 2;
-			const auto result = memcmp(left.value.GetData() + skip, right.value.GetData() + skip, common - skip);
-			if (result != 0) {
-				return result > 0;
-			}
-		}
-		return left_size > right_size;
-	}
-};
-
-template <>
-struct HeapEntry<PrefixedString> {
-	PrefixedString value;
 	uint32_t capacity;
 	data_ptr_t allocated_data;
 
+	HeapEntry() : value(), capacity(0), allocated_data(nullptr) {
+	}
+
+	// Not copyable
 	HeapEntry(const HeapEntry &other) = delete;
 	HeapEntry &operator=(const HeapEntry &other) = delete;
 
+	// But movable
 	HeapEntry(HeapEntry &&other) noexcept : value(other.value), capacity(other.capacity) {
 		allocated_data = other.allocated_data;
 		other.allocated_data = nullptr;
@@ -126,9 +59,42 @@ struct HeapEntry<PrefixedString> {
 		return *this;
 	}
 
-	void Assign(ArenaAllocator &allocator, const PrefixedString &new_val) {
-		value = PrefixedString {new_val.high, new_val.low,
-		                        StoreArenaString(allocator, new_val.value, capacity, allocated_data)};
+	void Assign(ArenaAllocator &allocator, const string_t &new_val) {
+		if (new_val.IsInlined()) {
+			value = new_val;
+			return;
+		}
+
+		// Short path for first assignment
+		if (allocated_data == nullptr) {
+			auto new_size = UnsafeNumericCast<uint32_t>(new_val.GetSize());
+			auto new_capacity = NextPowerOfTwo(new_size);
+			if (new_capacity > string_t::MAX_STRING_SIZE) {
+				throw ObjectSizeException("Resulting string/blob too large!");
+			}
+			capacity = UnsafeNumericCast<uint32_t>(new_capacity);
+			allocated_data = allocator.Allocate(capacity);
+			memcpy(allocated_data, new_val.GetData(), new_size);
+			value = string_t(const_char_ptr_cast(allocated_data), new_size);
+			return;
+		}
+
+		// double allocation until value fits
+		if (capacity < new_val.GetSize()) {
+			auto old_size = capacity;
+			auto new_size = UnsafeNumericCast<uint32_t>(new_val.GetSize());
+			auto new_capacity = NextPowerOfTwo(new_size);
+			if (new_capacity > string_t::MAX_STRING_SIZE) {
+				throw ObjectSizeException("Resulting string/blob too large!");
+			}
+			do {
+				capacity *= 2;
+			} while (capacity < new_val.GetSize());
+			allocated_data = allocator.Reallocate(allocated_data, old_size, capacity);
+		}
+		auto new_size = UnsafeNumericCast<uint32_t>(new_val.GetSize());
+		memcpy(allocated_data, new_val.GetData(), new_size);
+		value = string_t(const_char_ptr_cast(allocated_data), new_size);
 	}
 };
 
@@ -165,16 +131,20 @@ public:
 		// If the heap is not full, insert the value into a new slot
 		if (size < capacity) {
 			heap[size++].Assign(allocator, value);
-			std::push_heap(heap, heap + size, Compare);
+			std::push_heap(heap, heap + size, Compare());
+			if (size == capacity) {
+				worst = heap[0].value;
+			}
 		}
 		// If the heap is full, check if the value is greater than the smallest value in the heap
 		// If it is, assign the new value to the slot and re-heapify
-		else if (T_COMPARATOR::Operation(value, heap[0].value)) {
-			std::pop_heap(heap, heap + size, Compare);
+		else if (T_COMPARATOR::Operation(value, worst)) {
+			std::pop_heap(heap, heap + size, Compare());
 			heap[size - 1].Assign(allocator, value);
-			std::push_heap(heap, heap + size, Compare);
+			std::push_heap(heap, heap + size, Compare());
+			worst = heap[0].value;
 		}
-		D_ASSERT(std::is_heap(heap, heap + size, Compare));
+		D_ASSERT(std::is_heap(heap, heap + size, Compare()));
 	}
 
 	void Insert(ArenaAllocator &allocator, const UnaryAggregateHeap &other) {
@@ -184,7 +154,7 @@ public:
 	}
 
 	HeapEntry<T> *SortAndGetHeap() {
-		std::sort_heap(heap, heap + size, Compare);
+		std::sort_heap(heap, heap + size, Compare());
 		return heap;
 	}
 
@@ -193,13 +163,16 @@ public:
 	}
 
 private:
-	static bool Compare(const HeapEntry<T> &left, const HeapEntry<T> &right) {
-		return T_COMPARATOR::Operation(left.value, right.value);
-	}
+	struct Compare {
+		bool operator()(const HeapEntry<T> &left, const HeapEntry<T> &right) const {
+			return T_COMPARATOR::Operation(left.value, right.value);
+		}
+	};
 
 	idx_t capacity;
 	HeapEntry<T> *heap;
 	idx_t size;
+	T worst;
 };
 
 struct List {
@@ -247,17 +220,21 @@ public:
 			heap[size].first.Assign(allocator, key);
 			heap[size].second.Assign(allocator, value);
 			size++;
-			std::push_heap(heap, heap + size, Compare);
+			std::push_heap(heap, heap + size, Compare());
+			if (size == capacity) {
+				worst = heap[0].first.value;
+			}
 		}
 		// If the heap is full, check if the value is greater than the smallest value in the heap
 		// If it is, assign the new value to the slot and re-heapify
-		else if (K_COMPARATOR::Operation(key, heap[0].first.value)) {
-			std::pop_heap(heap, heap + size, Compare);
+		else if (K_COMPARATOR::Operation(key, worst)) {
+			std::pop_heap(heap, heap + size, Compare());
 			heap[size - 1].first.Assign(allocator, key);
 			heap[size - 1].second.Assign(allocator, value);
-			std::push_heap(heap, heap + size, Compare);
+			std::push_heap(heap, heap + size, Compare());
+			worst = heap[0].first.value;
 		}
-		D_ASSERT(std::is_heap(heap, heap + size, Compare));
+		D_ASSERT(std::is_heap(heap, heap + size, Compare()));
 	}
 
 	void Insert(ArenaAllocator &allocator, const BinaryAggregateHeap &other) {
@@ -267,7 +244,7 @@ public:
 	}
 
 	STORAGE_TYPE *SortAndGetHeap() {
-		std::sort_heap(heap, heap + size, Compare);
+		std::sort_heap(heap, heap + size, Compare());
 		return heap;
 	}
 
@@ -300,14 +277,17 @@ private:
 		heap = reinterpret_cast<STORAGE_TYPE *>(ptr);
 	}
 
-	static bool Compare(const STORAGE_TYPE &left, const STORAGE_TYPE &right) {
-		return K_COMPARATOR::Operation(left.first.value, right.first.value);
-	}
+	struct Compare {
+		bool operator()(const STORAGE_TYPE &left, const STORAGE_TYPE &right) const {
+			return K_COMPARATOR::Operation(left.first.value, right.first.value);
+		}
+	};
 
 	idx_t capacity = 0;
 	idx_t allocated_capacity = 0;
 	STORAGE_TYPE *heap = nullptr;
 	idx_t size = 0;
+	K worst;
 };
 
 enum class ArgMinMaxNullHandling { IGNORE_ANY_NULL, HANDLE_ARG_NULL, HANDLE_ANY_NULL };
@@ -361,15 +341,15 @@ struct MinMaxFixedValue {
 };
 
 struct MinMaxStringValue {
-	using TYPE = PrefixedString;
+	using TYPE = string_t;
 	using EXTRA_STATE = bool;
 
 	static TYPE Create(const UnifiedVectorFormat &format, const idx_t idx) {
-		return PrefixedString::Make(UnifiedVectorFormat::GetData<string_t>(format)[idx]);
+		return UnifiedVectorFormat::GetData<string_t>(format)[idx];
 	}
 
 	static void Assign(Vector &vector, const idx_t idx, const TYPE &value, const bool nulls_last) {
-		FlatVector::GetDataMutable<string_t>(vector)[idx] = StringVector::AddStringOrBlob(vector, value.value);
+		FlatVector::GetDataMutable<string_t>(vector)[idx] = StringVector::AddStringOrBlob(vector, value);
 	}
 
 	// Nothing to do here
@@ -384,17 +364,17 @@ struct MinMaxStringValue {
 
 // Use sort key to serialize/deserialize values
 struct MinMaxFallbackValue {
-	using TYPE = PrefixedString;
+	using TYPE = string_t;
 	using EXTRA_STATE = Vector;
 
 	static TYPE Create(const UnifiedVectorFormat &format, const idx_t idx) {
-		return PrefixedString::Make(UnifiedVectorFormat::GetData<string_t>(format)[idx]);
+		return UnifiedVectorFormat::GetData<string_t>(format)[idx];
 	}
 
 	static void Assign(Vector &vector, const idx_t idx, const TYPE &value, const bool nulls_last) {
 		auto order_by_null_type = nulls_last ? OrderByNullType::NULLS_LAST : OrderByNullType::NULLS_FIRST;
 		OrderModifiers modifiers(OrderType::ASCENDING, order_by_null_type);
-		CreateSortKeyHelpers::DecodeSortKey(value.value, vector, idx, modifiers);
+		CreateSortKeyHelpers::DecodeSortKey(value, vector, idx, modifiers);
 	}
 
 	static EXTRA_STATE CreateExtraState() {

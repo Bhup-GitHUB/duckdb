@@ -1,4 +1,6 @@
 #include "duckdb/planner/binder.hpp"
+#include "duckdb/function/macro_function.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/parser/statement/prepare_statement.hpp"
 #include "duckdb/planner/planner.hpp"
 #include "duckdb/planner/operator/logical_prepare.hpp"
@@ -6,8 +8,12 @@
 namespace duckdb {
 
 BoundStatement Binder::Bind(PrepareStatement &stmt) {
+	const bool declared = !ClientContext::IsPreparedStatementHandle(stmt.name);
 	for (auto &entry : stmt.parameter_type_hints) {
 		BindLogicalType(entry.second);
+		if (declared) {
+			entry.second = MacroFunction::WithoutTypmod(entry.second);
+		}
 	}
 	Planner prepared_planner(context);
 	prepared_planner.parameter_type_hints = stmt.parameter_type_hints;

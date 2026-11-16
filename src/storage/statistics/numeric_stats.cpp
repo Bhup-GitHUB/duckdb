@@ -26,10 +26,10 @@ void InitializeEmptyFloatingPointStats(BaseStatistics &result) {
 
 template <class T>
 bool TryCastBounds(const BaseStatistics &stats, T &min, T &max) {
-	if (!NumericStats::HasMinMax(stats)) {
+	const auto &type = stats.GetType();
+	if (!type.IsNumeric() || !NumericStats::HasMinMax(stats)) {
 		return false;
 	}
-	const auto &type = stats.GetType();
 	return NumericStats::Visit(type.InternalType(), [&]<class S>() {
 		if constexpr (std::is_same_v<S, interval_t>) {
 			return false;

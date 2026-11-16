@@ -70,6 +70,9 @@ public:
 private:
 	void Compare(const Vector &input, idx_t col, Vector &result, idx_t count);
 	const int8_t *DictionaryOrders(const Vector &input, idx_t count);
+	void GatherOrders(const int8_t *dictionary, const Vector &input, idx_t count);
+	void Orders(const Vector &input, idx_t col, idx_t count);
+	idx_t SelectOrdered(DataChunk &keys, bool inclusive, SelectionVector &sel, idx_t &before);
 
 private:
 	const vector<OrderModifiers> modifiers;

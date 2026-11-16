@@ -715,7 +715,7 @@ idx_t AdmitGroups(ClientContext &context, const RadixPartitionedHashTable &radix
 void FreezeGroupBound(ClientContext &context, const RadixPartitionedHashTable &radix_ht,
                       RadixHTGlobalSinkState &gstate) {
 	auto &bound = *gstate.group_bound;
-	vector<string> keys;
+	vector<string_t> keys;
 	if (!bound.Freeze(keys)) {
 		return;
 	}
@@ -723,7 +723,7 @@ void FreezeGroupBound(ClientContext &context, const RadixPartitionedHashTable &r
 	DataChunk decoded;
 	decoded.Initialize(allocator, bound.Types());
 	for (idx_t i = 0; i < keys.size(); i++) {
-		CreateSortKeyHelpers::DecodeSortKey(string_t(keys[i]), decoded, i, bound.Order());
+		CreateSortKeyHelpers::DecodeSortKey(keys[i], decoded, i, bound.Order());
 	}
 	decoded.SetChildCardinality(keys.size());
 	DataChunk groups;

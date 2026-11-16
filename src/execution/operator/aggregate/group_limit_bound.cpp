@@ -44,33 +44,45 @@ unique_ptr<GroupLimitBound> GroupLimitBound::TryCreate(const vector<LogicalType>
 	return make_uniq<GroupLimitBound>(group_types, group_limit);
 }
 
-void GroupLimitBound::Publish(const vector<string> &candidates, const string &limit_key) {
+void GroupLimitBound::Publish(const vector<string_t> &candidates, string_t limit_key) {
 	const annotated_lock_guard<annotated_mutex> guard {lock};
-	if (!frozen && boundary.Update(string_t(limit_key))) {
-		keys.assign(candidates.begin(), candidates.begin() + NumericCast<int64_t>(limit));
+	if (frozen || !boundary.Update(limit_key)) {
+		return;
+	}
+	key_bytes.clear();
+	key_ends.clear();
+	for (idx_t i = 0; i < limit; i++) {
+		key_bytes.append(candidates[i].GetData(), candidates[i].GetSize());
+		key_ends.push_back(key_bytes.size());
 	}
 }
 
-bool GroupLimitBound::Freeze(vector<string> &result) {
+bool GroupLimitBound::Freeze(vector<string_t> &result) {
 	const annotated_lock_guard<annotated_mutex> guard {lock};
 	if (frozen) {
 		return false;
 	}
 	frozen = true;
-	result = std::move(keys);
+	result.clear();
+	idx_t begin = 0;
+	for (const auto end : key_ends) {
+		result.emplace_back(key_bytes.data() + begin, UnsafeNumericCast<uint32_t>(end - begin));
+		begin = end;
+	}
 	return true;
 }
 
 void GroupLimitBound::Reset() {
 	boundary.Reset();
 	const annotated_lock_guard<annotated_mutex> guard {lock};
-	keys.clear();
+	key_bytes.clear();
+	key_ends.clear();
 	frozen = false;
 }
 
 GroupLimitBoundSink::GroupLimitBoundSink(Allocator &allocator, const GroupLimitBound &bound)
-    : filter(allocator, bound.Types(), bound.Order()), candidate_sel(STANDARD_VECTOR_SIZE),
-      keys_cache(allocator, LogicalType::BLOB), keys(keys_cache) {
+    : allocator(allocator), filter(allocator, bound.Types(), bound.Order()), candidate_sel(STANDARD_VECTOR_SIZE),
+      keys_cache(allocator, LogicalType::BLOB), keys(keys_cache), candidate_heap(allocator) {
 	ordered.InitializeEmpty(bound.Types());
 	candidate_groups.InitializeEmpty(bound.Types());
 }
@@ -99,17 +111,15 @@ void GroupLimitBoundSink::AddCandidates(GroupLimitBound &bound, DataChunk &group
 	const auto limit = bound.Limit();
 	keys.ResetFromCache(keys_cache);
 	CreateSortKeyHelpers::CreateSortKey(candidate_groups, bound.Order(), keys);
-	string_t limit_value(limit_key);
 	bool compacted = false;
 	for (auto entry : keys.Values<string_t>()) {
 		const auto key = entry.GetValueUnsafe();
-		if (full && !(key < limit_value)) {
+		if (full && !(key < limit_key)) {
 			continue;
 		}
-		candidates.emplace_back(key.GetData(), key.GetSize());
+		candidates.push_back(candidate_heap.AddBlob(key));
 		if (candidates.size() >= 2 * limit) {
 			Compact(limit);
-			limit_value = string_t(limit_key);
 			compacted = true;
 		}
 	}
@@ -127,8 +137,16 @@ void GroupLimitBoundSink::Compact(idx_t limit) {
 	candidates.erase(std::ranges::unique(candidates).begin(), candidates.end());
 	if (candidates.size() >= limit) {
 		candidates.resize(limit);
-		limit_key = candidates.back();
 		full = true;
+	}
+	StringHeap kept(allocator);
+	for (auto &candidate : candidates) {
+		candidate = kept.AddBlob(candidate);
+	}
+	candidate_heap.Destroy();
+	candidate_heap.Move(kept);
+	if (full) {
+		limit_key = candidates.back();
 	}
 }
 

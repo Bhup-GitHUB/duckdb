@@ -10,6 +10,7 @@
 
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/sorting/sort_key_boundary.hpp"
+#include "duckdb/common/types/string_heap.hpp"
 #include "duckdb/common/types/vector_cache.hpp"
 #include "duckdb/planner/group_limit.hpp"
 
@@ -40,8 +41,8 @@ public:
 		return boundary;
 	}
 
-	void Publish(const vector<string> &candidates, const string &limit_key);
-	bool Freeze(vector<string> &keys);
+	void Publish(const vector<string_t> &candidates, string_t limit_key);
+	bool Freeze(vector<string_t> &keys);
 	void Reset();
 
 private:
@@ -52,7 +53,8 @@ private:
 	bool ordered;
 	SortKeyBoundary boundary;
 	annotated_mutex lock;
-	vector<string> keys DUCKDB_GUARDED_BY(lock);
+	string key_bytes DUCKDB_GUARDED_BY(lock);
+	vector<idx_t> key_ends DUCKDB_GUARDED_BY(lock);
 	bool frozen DUCKDB_GUARDED_BY(lock) = false;
 };
 
@@ -66,6 +68,7 @@ public:
 private:
 	void Compact(idx_t limit);
 
+	Allocator &allocator;
 	SortKeyBoundaryFilter filter;
 	DataChunk ordered;
 	bool filtered = false;
@@ -73,8 +76,9 @@ private:
 	DataChunk candidate_groups;
 	VectorCache keys_cache;
 	Vector keys;
-	vector<string> candidates;
-	string limit_key;
+	StringHeap candidate_heap;
+	vector<string_t> candidates;
+	string_t limit_key;
 	bool full = false;
 };
 

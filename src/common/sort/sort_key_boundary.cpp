@@ -175,6 +175,25 @@ const int8_t *SortKeyBoundaryFilter::DictionaryOrders(const Vector &input, idx_t
 	return FlatVector::GetData<int8_t>(*dictionary_orders);
 }
 
+void SortKeyBoundaryFilter::GatherOrders(const int8_t *dictionary, const Vector &input, idx_t count) {
+	comparison.ResetFromCache(comparison_cache);
+	const auto &rows = DictionaryVector::SelVector(input);
+	auto result = FlatVector::GetDataMutable<int8_t>(comparison);
+	for (idx_t i = 0; i < count; i++) {
+		result[i] = dictionary[rows.get_index(i)];
+	}
+	FlatVector::SetSize(comparison, count);
+}
+
+void SortKeyBoundaryFilter::Orders(const Vector &input, idx_t col, idx_t count) {
+	if (const auto dictionary = col == 0 ? DictionaryOrders(input, count) : nullptr) {
+		GatherOrders(dictionary, input, count);
+		return;
+	}
+	comparison.ResetFromCache(comparison_cache);
+	Compare(input, col, comparison, count);
+}
+
 idx_t SortKeyBoundaryFilter::Admit(DataChunk &keys, SelectionVector &sel) {
 	D_ASSERT(is_set);
 	const auto count = keys.size();
@@ -190,52 +209,50 @@ idx_t SortKeyBoundaryFilter::Admit(DataChunk &keys, SelectionVector &sel) {
 			any_after |= order == after_order;
 			any_tie |= order == 0;
 		}
+		if (!any_after && (!any_tie || modifiers.size() == 1)) {
+			return count;
+		}
+		GatherOrders(orders, input, count);
 	} else {
 		comparison.ResetFromCache(comparison_cache);
 		Compare(input, 0, comparison, count);
-		if (comparison.GetVectorType() != VectorType::FLAT_VECTOR) {
-			idx_t before;
-			return Select(keys, true, sel, before);
+		if (comparison.GetVectorType() == VectorType::FLAT_VECTOR) {
+			const auto compared = FlatVector::GetData<int8_t>(comparison);
+			for (idx_t i = 0; i < count; i++) {
+				any_after |= compared[i] == after_order;
+				any_tie |= compared[i] == 0;
+			}
+			if (!any_after && (!any_tie || modifiers.size() == 1)) {
+				return count;
+			}
 		}
-		const auto compared = FlatVector::GetData<int8_t>(comparison);
-		for (idx_t i = 0; i < count; i++) {
-			any_after |= compared[i] == after_order;
-			any_tie |= compared[i] == 0;
-		}
-	}
-	if (!any_after && (!any_tie || modifiers.size() == 1)) {
-		return count;
 	}
 	idx_t before;
-	return Select(keys, true, sel, before);
+	return SelectOrdered(keys, true, sel, before);
 }
 
 idx_t SortKeyBoundaryFilter::Select(DataChunk &keys, bool inclusive, SelectionVector &sel, idx_t &before) {
 	D_ASSERT(is_set);
 	boundary_values.SetChildCardinality(keys.size());
+	Orders(keys.data[0], 0, keys.size());
+	return SelectOrdered(keys, inclusive, sel, before);
+}
+
+idx_t SortKeyBoundaryFilter::SelectOrdered(DataChunk &keys, bool inclusive, SelectionVector &sel, idx_t &before) {
 	idx_t selected = 0;
 	idx_t remaining = keys.size();
 	bool all_rows = true;
 	for (idx_t col = 0; col < modifiers.size() && remaining > 0; col++) {
-		auto &input = compare_chunk.data[col];
-		if (all_rows) {
-			input.Reference(keys.data[col]);
-		} else {
-			input.Slice(keys.data[col], ties, remaining);
+		if (col != 0) {
+			auto &input = compare_chunk.data[col];
+			if (all_rows) {
+				input.Reference(keys.data[col]);
+			} else {
+				input.Slice(keys.data[col], ties, remaining);
+			}
+			Orders(input, col, remaining);
 		}
 		const bool descending = modifiers[col].order_type == OrderType::DESCENDING;
-		comparison.ResetFromCache(comparison_cache);
-		const auto dictionary = col == 0 ? DictionaryOrders(input, remaining) : nullptr;
-		if (dictionary) {
-			const auto &rows = DictionaryVector::SelVector(input);
-			auto result = FlatVector::GetDataMutable<int8_t>(comparison);
-			for (idx_t i = 0; i < remaining; i++) {
-				result[i] = dictionary[rows.get_index(i)];
-			}
-			FlatVector::SetSize(comparison, remaining);
-		} else {
-			Compare(input, col, comparison, remaining);
-		}
 		const auto before_order = descending ? int8_t(1) : int8_t(-1);
 		auto sel_data = sel.data();
 		auto tie_data = ties.data();

@@ -48,7 +48,7 @@ unique_ptr<LogicalOperator> LogicalExplain::CreateSQLResult(ClientContext &conte
 			throw NotImplementedException({{"sql_export_unsupported", "true"}}, message);
 		}
 	}
-	const bool keyed = output_shape != ExplainFormatShape::PG;
+	const bool keyed = output_shape != ExplainFormatShape::SERVER;
 	vector<LogicalType> result_types(keyed ? 2 : 1, LogicalType::VARCHAR);
 	auto collection =
 	    make_uniq<ColumnDataCollection>(context, result_types, ColumnDataAllocatorType::IN_MEMORY_ALLOCATOR);
@@ -74,7 +74,7 @@ bool LogicalExplain::SupportSerialization() const {
 }
 
 void LogicalExplain::ResolveTypes() {
-	if (output_shape == ExplainFormatShape::PG) {
+	if (output_shape == ExplainFormatShape::SERVER) {
 		types = {LogicalType::VARCHAR};
 	} else {
 		types = {LogicalType::VARCHAR, LogicalType::VARCHAR};
@@ -83,7 +83,7 @@ void LogicalExplain::ResolveTypes() {
 vector<ColumnBinding> LogicalExplain::GetColumnBindings() {
 	vector<ColumnBinding> result;
 	TableIndex explain_tbl_idx(0);
-	auto column_count = output_shape == ExplainFormatShape::PG ? 1 : 2;
+	auto column_count = output_shape == ExplainFormatShape::SERVER ? 1 : 2;
 	for (auto explain_col_idx : ProjectionIndex::GetIndexes(column_count)) {
 		result.emplace_back(explain_tbl_idx, explain_col_idx);
 	}

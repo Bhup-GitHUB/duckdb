@@ -27,7 +27,7 @@ public:
 
 	ExplainType explain_type;
 	ProfilerPrintFormat format;
-	ExplainFormatShape output_shape = ExplainFormatShape::DUCKDB_NATIVE;
+	ExplainFormatShape output_shape = ExplainFormatShape::CLI;
 	string physical_plan;
 	string logical_plan_unopt;
 	string logical_plan_opt;

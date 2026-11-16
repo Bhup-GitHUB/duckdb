@@ -57,7 +57,7 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalExplain &op) {
 
 	DataChunk chunk;
 	chunk.Initialize(allocator, op.types);
-	if (op.output_shape == ExplainFormatShape::PG) {
+	if (op.output_shape == ExplainFormatShape::SERVER) {
 		bool split_lines = renderer && renderer->RendersLines();
 		for (idx_t i = 0; i < values.size(); i++) {
 			if (split_lines && values.size() > 1) {

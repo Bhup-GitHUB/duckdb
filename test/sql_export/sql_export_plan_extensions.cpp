@@ -63,7 +63,7 @@ TEST_CASE("SQL verification fallback preserves extension reconstruction failures
 		REQUIRE(exported.GetIssues()[0].code == LogicalPlanVerificationIssueCode::UNSUPPORTED_EXPORT_FEATURE);
 		REQUIRE(exported.GetIssues()[1].code == LogicalPlanVerificationIssueCode::INTERNAL_INVARIANT);
 		LogicalExplain explain(std::move(plan), ExplainType::EXPLAIN_SQL, ProfilerPrintFormat::Default(),
-		                       ExplainFormatShape::DUCKDB_NATIVE);
+		                       ExplainFormatShape::CLI);
 		explain.allow_unsupported_sql = allow_unsupported;
 #ifndef DUCKDB_CRASH_ON_ASSERT
 		REQUIRE_THROWS_AS(explain.CreateSQLResult(*connection.context, TableIndex(83)), InternalException);

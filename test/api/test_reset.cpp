@@ -77,7 +77,7 @@ OptionValueSet GetValueForOption(const string &name, const LogicalType &type) {
 	    {"autoinstall_known_extensions", {false}},
 	    {"enable_profiling", {"json"}},
 	    {"explain_output", {{"all", "optimized_only", "physical_only"}}},
-	    {"explain_output_format", {"pg"}},
+	    {"explain_output_format", {"server"}},
 	    {"default_transaction_isolation", {"serializable"}},
 	    {"force_dict_fsst_mode", {"AUTO"}},
 	    {"file_search_path", {"test"}},

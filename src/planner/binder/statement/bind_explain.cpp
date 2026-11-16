@@ -34,7 +34,7 @@ BoundStatement Binder::Bind(ExplainStatement &stmt) {
 	}
 
 	result.plan = std::move(explain);
-	if (output_shape == ExplainFormatShape::PG) {
+	if (output_shape == ExplainFormatShape::SERVER) {
 		result.names = {"QUERY PLAN"};
 		result.types = {LogicalType::VARCHAR};
 	} else {

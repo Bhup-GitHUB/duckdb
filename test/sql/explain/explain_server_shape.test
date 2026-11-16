@@ -1,9 +1,9 @@
-# name: test/sql/explain/explain_pg_shape.test
-# description: The PG shape of EXPLAIN returns a text plan one row per line and a document one row per plan
+# name: test/sql/explain/explain_server_shape.test
+# description: The SERVER shape of EXPLAIN returns a text plan one row per line and a document one row per plan
 # group: [explain]
 
 statement ok
-SET explain_output_format = 'PG';
+SET explain_output_format = 'SERVER';
 
 query I
 EXPLAIN (FORMAT json) SELECT 1

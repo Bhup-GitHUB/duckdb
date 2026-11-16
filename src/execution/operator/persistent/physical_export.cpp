@@ -169,7 +169,8 @@ static AlterJobInfo AlterJob(AlterJobType type, const CatalogEntry &job, const I
 }
 
 static void WriteJobState(stringstream &ss, const CatalogEntry &owner, const CatalogEntry &job) {
-	if (job.name != owner.name) {
+	const IdentifierEquality same_name(owner.ParentCatalog().IsCaseSensitive());
+	if (!same_name(job.name, owner.name)) {
 		auto rename = AlterJob(AlterJobType::RENAME, job, owner.name);
 		rename.new_name = job.name;
 		ss << rename.ToString() << '\n';

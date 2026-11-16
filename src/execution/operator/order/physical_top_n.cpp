@@ -141,7 +141,7 @@ private:
 				row_keys[r] = SORT_KEY();
 				row_targets[r] = data_ptr_cast(&row_keys[r].part0);
 			}
-			CreateSortKeyHelpers::CreateSortKey(sort_chunk, modifiers, row_targets.get());
+			CreateSortKeyHelpers::CreateSortKey(sort_chunk, modifiers, row_targets.get(), row_offsets);
 			for (idx_t r = 0; r < count; r++) {
 				row_keys[r].ByteSwap();
 			}
@@ -219,6 +219,7 @@ private:
 	StringHeap sort_key_heap;
 	unsafe_unique_array<SORT_KEY> row_keys;
 	unsafe_unique_array<data_ptr_t> row_targets;
+	unsafe_vector<idx_t> row_offsets;
 	data_t key_bytes[SORT_KEY::PARTS * sizeof(uint64_t)];
 };
 

@@ -1012,11 +1012,10 @@ idx_t CreateSortKeyHelpers::CreateSortKey(const LogicalType &type, const_data_pt
 	}
 }
 
-void CreateSortKeyHelpers::CreateSortKey(DataChunk &input, const vector<OrderModifiers> &modifiers,
-                                         data_ptr_t *targets) {
+void CreateSortKeyHelpers::CreateSortKey(DataChunk &input, const vector<OrderModifiers> &modifiers, data_ptr_t *targets,
+                                         unsafe_vector<idx_t> &offsets) {
 	D_ASSERT(modifiers.size() == input.ColumnCount());
-	unsafe_vector<idx_t> offsets;
-	offsets.resize(input.size(), 0);
+	offsets.assign(input.size(), 0);
 	for (idx_t c = 0; c < modifiers.size(); c++) {
 		SortKeyVectorData vector_data(input.data[c], input.size(), modifiers[c]);
 		SortKeyConstructInfo info(modifiers[c], offsets, targets);

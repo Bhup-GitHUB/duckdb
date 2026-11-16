@@ -1158,17 +1158,7 @@
     "class": "LogicalAlter",
     "base": "LogicalOperator",
     "enum": "LOGICAL_ALTER",
-    "members": [
-      {
-        "id": 200,
-        "name": "info",
-        "type": "AlterInfo*",
-        "base": "ParseInfo"
-      }
-    ],
-    "constructor": [
-      "info"
-    ]
+    "custom_implementation": true
   },
   {
     "class": "LogicalLoad",
@@ -1222,17 +1212,7 @@
     "class": "LogicalDrop",
     "base": "LogicalOperator",
     "enum": "LOGICAL_DROP",
-    "members": [
-      {
-        "id": 200,
-        "name": "info",
-        "type": "DropInfo*",
-        "base": "ParseInfo"
-      }
-    ],
-    "constructor": [
-      "info"
-    ]
+    "custom_implementation": true
   },
   {
     "class": "LogicalDetach",

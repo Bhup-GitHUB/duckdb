@@ -756,7 +756,8 @@ string QueryProfiler::JSONSanitize(std::string_view text) {
 profiler_metrics_t OperatorMetrics::GetMetrics(const GatheredMetrics &info) const {
 	profiler_metrics_t result;
 	if (info.MetricIsTracked<MetricOperatorType>()) {
-		result["type"] = Value(EnumUtil::ToString(operator_type));
+		result["type"] =
+		    Value(operator_type == PhysicalOperatorType::EXTENSION ? name : EnumUtil::ToString(operator_type));
 	}
 	if (info.MetricIsTracked<MetricOperatorTiming>()) {
 		result["timing"] = Value::DOUBLE(time);

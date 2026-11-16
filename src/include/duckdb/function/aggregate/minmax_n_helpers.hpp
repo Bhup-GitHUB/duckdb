@@ -32,87 +32,45 @@ struct HeapEntry {
 	}
 };
 
-// For strings that require arena allocation
 template <>
-struct HeapEntry<string_t> {
-	string_t value;
-	uint32_t capacity;
-	data_ptr_t allocated_data;
+struct HeapEntry<string_t>;
 
-	HeapEntry() : value(), capacity(0), allocated_data(nullptr) {
+inline string_t StoreArenaString(ArenaAllocator &allocator, const string_t &new_val, uint32_t &capacity,
+                                 data_ptr_t &allocated_data) {
+	if (new_val.IsInlined()) {
+		return new_val;
 	}
 
-	// Not copyable
-	HeapEntry(const HeapEntry &other) = delete;
-	HeapEntry &operator=(const HeapEntry &other) = delete;
-
-	// But movable
-	HeapEntry(HeapEntry &&other) noexcept {
-		if (other.value.IsInlined()) {
-			value = other.value;
-			capacity = 0;
-			allocated_data = nullptr;
-		} else {
-			capacity = other.capacity;
-			allocated_data = other.allocated_data;
-			value = string_t(const_char_ptr_cast(allocated_data), UnsafeNumericCast<uint32_t>(other.value.GetSize()));
-			other.allocated_data = nullptr;
-		}
-	}
-
-	HeapEntry &operator=(HeapEntry &&other) noexcept {
-		if (other.value.IsInlined()) {
-			value = other.value;
-		} else {
-			capacity = other.capacity;
-			allocated_data = other.allocated_data;
-			value = string_t(const_char_ptr_cast(allocated_data), UnsafeNumericCast<uint32_t>(other.value.GetSize()));
-			other.allocated_data = nullptr;
-		}
-		return *this;
-	}
-
-	void Assign(ArenaAllocator &allocator, const string_t &new_val) {
-		value = Store(allocator, new_val, capacity, allocated_data);
-	}
-
-	static string_t Store(ArenaAllocator &allocator, const string_t &new_val, uint32_t &capacity,
-	                      data_ptr_t &allocated_data) {
-		if (new_val.IsInlined()) {
-			return new_val;
-		}
-
-		// Short path for first assignment
-		if (allocated_data == nullptr) {
-			auto new_size = UnsafeNumericCast<uint32_t>(new_val.GetSize());
-			auto new_capacity = NextPowerOfTwo(new_size);
-			if (new_capacity > string_t::MAX_STRING_SIZE) {
-				throw ObjectSizeException("Resulting string/blob too large!");
-			}
-			capacity = UnsafeNumericCast<uint32_t>(new_capacity);
-			allocated_data = allocator.Allocate(capacity);
-			memcpy(allocated_data, new_val.GetData(), new_size);
-			return string_t(const_char_ptr_cast(allocated_data), new_size);
-		}
-
-		// double allocation until value fits
-		if (capacity < new_val.GetSize()) {
-			auto old_size = capacity;
-			auto new_size = UnsafeNumericCast<uint32_t>(new_val.GetSize());
-			auto new_capacity = NextPowerOfTwo(new_size);
-			if (new_capacity > string_t::MAX_STRING_SIZE) {
-				throw ObjectSizeException("Resulting string/blob too large!");
-			}
-			do {
-				capacity *= 2;
-			} while (capacity < new_val.GetSize());
-			allocated_data = allocator.Reallocate(allocated_data, old_size, capacity);
-		}
+	// Short path for first assignment
+	if (allocated_data == nullptr) {
 		auto new_size = UnsafeNumericCast<uint32_t>(new_val.GetSize());
+		auto new_capacity = NextPowerOfTwo(new_size);
+		if (new_capacity > string_t::MAX_STRING_SIZE) {
+			throw ObjectSizeException("Resulting string/blob too large!");
+		}
+		capacity = UnsafeNumericCast<uint32_t>(new_capacity);
+		allocated_data = allocator.Allocate(capacity);
 		memcpy(allocated_data, new_val.GetData(), new_size);
 		return string_t(const_char_ptr_cast(allocated_data), new_size);
 	}
-};
+
+	// double allocation until value fits
+	if (capacity < new_val.GetSize()) {
+		auto old_size = capacity;
+		auto new_size = UnsafeNumericCast<uint32_t>(new_val.GetSize());
+		auto new_capacity = NextPowerOfTwo(new_size);
+		if (new_capacity > string_t::MAX_STRING_SIZE) {
+			throw ObjectSizeException("Resulting string/blob too large!");
+		}
+		do {
+			capacity *= 2;
+		} while (capacity < new_val.GetSize());
+		allocated_data = allocator.Reallocate(allocated_data, old_size, capacity);
+	}
+	auto new_size = UnsafeNumericCast<uint32_t>(new_val.GetSize());
+	memcpy(allocated_data, new_val.GetData(), new_size);
+	return string_t(const_char_ptr_cast(allocated_data), new_size);
+}
 
 struct PrefixedString {
 	uint64_t high;
@@ -144,10 +102,6 @@ struct PrefixedString {
 		}
 		return left_size > right_size;
 	}
-
-	friend bool operator==(const PrefixedString &left, const PrefixedString &right) {
-		return left.high == right.high && left.low == right.low && Equals::Operation(left.value, right.value);
-	}
 };
 
 template <>
@@ -155,9 +109,6 @@ struct HeapEntry<PrefixedString> {
 	PrefixedString value;
 	uint32_t capacity;
 	data_ptr_t allocated_data;
-
-	HeapEntry() : value(), capacity(0), allocated_data(nullptr) {
-	}
 
 	HeapEntry(const HeapEntry &other) = delete;
 	HeapEntry &operator=(const HeapEntry &other) = delete;
@@ -177,7 +128,7 @@ struct HeapEntry<PrefixedString> {
 
 	void Assign(ArenaAllocator &allocator, const PrefixedString &new_val) {
 		value = PrefixedString {new_val.high, new_val.low,
-		                        HeapEntry<string_t>::Store(allocator, new_val.value, capacity, allocated_data)};
+		                        StoreArenaString(allocator, new_val.value, capacity, allocated_data)};
 	}
 };
 

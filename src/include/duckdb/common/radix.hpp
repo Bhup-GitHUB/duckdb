@@ -61,27 +61,28 @@ private:
 	static inline U EncodeFloating(F x) {
 		constexpr U SIGN = U(1) << (sizeof(U) * 8 - 1);
 		constexpr U INFINITE = std::bit_cast<U>(std::numeric_limits<F>::infinity());
-		const auto bits = Load<U>(const_data_ptr_cast(&x));
+		const auto bits = std::bit_cast<U>(x);
 		const auto magnitude = static_cast<U>(bits & ~SIGN);
-		if (magnitude >= INFINITE) {
-			return magnitude > INFINITE ? ~U(0) : (bits & SIGN ? U(0) : static_cast<U>(~U(0) - 1));
+		if (static_cast<U>(magnitude - 1) >= static_cast<U>(INFINITE - 1)) [[unlikely]] {
+			if (magnitude == 0) {
+				return SIGN;
+			}
+			if (magnitude > INFINITE) {
+				return ~U(0);
+			}
+			return bits & SIGN ? U(0) : static_cast<U>(~U(0) - 1);
 		}
-		const auto key = static_cast<U>(
-		    bits ^ (static_cast<U>(static_cast<std::make_signed_t<U>>(bits) >> (sizeof(U) * 8 - 1)) | SIGN));
-		return magnitude == 0 ? SIGN : key;
+		return static_cast<U>(bits ^
+		                      (static_cast<U>(static_cast<std::make_signed_t<U>>(bits) >> (sizeof(U) * 8 - 1)) | SIGN));
 	}
 
 	template <class F, class U>
 	static inline F DecodeFloating(U input) {
 		constexpr U SIGN = U(1) << (sizeof(U) * 8 - 1);
-		if (static_cast<U>(input - 1) >= static_cast<U>(~U(0) - 2)) {
-			return input == ~U(0)
-			           ? std::numeric_limits<F>::quiet_NaN()
-			           : (input == 0 ? -std::numeric_limits<F>::infinity() : std::numeric_limits<F>::infinity());
-		}
-		const auto bits = static_cast<U>(
-		    input ^ (static_cast<U>(static_cast<std::make_signed_t<U>>(~input) >> (sizeof(U) * 8 - 1)) | SIGN));
-		return Load<F>(const_data_ptr_cast(&bits));
+		auto bits = (input & SIGN) != 0 ? static_cast<U>(input ^ SIGN) : static_cast<U>(~input);
+		bits = input == 0 ? std::bit_cast<U>(-std::numeric_limits<F>::infinity()) : bits;
+		bits = input == static_cast<U>(~U(0) - 1) ? std::bit_cast<U>(std::numeric_limits<F>::infinity()) : bits;
+		return std::bit_cast<F>(bits);
 	}
 };
 

@@ -147,26 +147,49 @@ bool TaskExecutor::IsCancelled() const {
 
 void TaskExecutor::ScheduleTask(unique_ptr<BaseExecutorTask> task) {
 	// wrap before taking ownership of a slot, so that a failure to allocate the wrapper needs no rollback
-	auto scheduled_task = make_shared_ptr<TaskExecutorTask>(*this, std::move(task));
+	shared_ptr<TaskExecutorTask> scheduled_task;
+	try {
+		scheduled_task = make_shared_ptr<TaskExecutorTask>(*this, std::move(task));
+	} catch (...) {
+		// the wrapper never took the task, which still has to be told that it will not run
+		if (task) {
+			try {
+				task->Cancel();
+			} catch (...) { // NOLINT
+			}
+		}
+		throw;
+	}
 	{
 		const annotated_lock_guard<annotated_mutex> lock(token->producer_lock);
 		++total_tasks;
 	}
 	try {
+		// an executor without a query can outlive a change of the async threads, so it picks the pool as it schedules
+		const auto pool = type == TaskSchedulerType::ASYNC && !context && scheduler.NumberOfAsyncThreads() == 0
+		                      ? TaskSchedulerType::REGULAR
+		                      : type;
 		// hold on to our own reference, so that a task that fails to queue can still be retired
-		scheduler.ScheduleConcurrentTask(*token, scheduled_task, type);
+		scheduler.ScheduleConcurrentTask(*token, scheduled_task, pool);
 	} catch (...) {
 		{
 			const annotated_lock_guard<annotated_mutex> lock(token->producer_lock);
 			// We failed to schedule the task, so we decrement the total number of tasks, instead of incrementing
 			// completed tasks count.
 			--total_tasks;
-			token->producer_cv.Signal();
+			token->producer_cv.SignalAll();
 		}
 		scheduled_task->Retire();
 		throw;
 	}
 }
+
+void TaskExecutor::ScheduleTask(unique_ptr<BaseExecutorTask> task, idx_t limit) {
+	D_ASSERT(limit != 0);
+	DrainTasks(limit);
+	ScheduleTask(std::move(task));
+}
+
 void TaskExecutor::FinishTask() {
 	const annotated_lock_guard<annotated_mutex> lk(token->producer_lock);
 	++completed_tasks;
@@ -180,13 +203,13 @@ void TaskExecutor::WaitForProgress() {
 	token->producer_cv.WaitWithTimeout(lk.mutex(), WAIT);
 }
 
-void TaskExecutor::DrainTasks() {
+void TaskExecutor::DrainTasks(idx_t limit) {
 	// wait for all active tasks to finish, executing queued tasks on this thread where possible
 	shared_ptr<Task> task_from_producer;
 	while (true) {
 		{
 			annotated_unique_lock<annotated_mutex> lk(token->producer_lock);
-			if (completed_tasks == total_tasks) {
+			if (total_tasks - completed_tasks < limit) {
 				break;
 			}
 			if (!scheduler.GetTaskFromProducerLocked(*token, task_from_producer)) {
@@ -212,6 +235,10 @@ void TaskExecutor::WorkOnTasks() {
 		// throw the error
 		ThrowError();
 	}
+}
+
+void TaskExecutor::Join() {
+	DrainTasks();
 }
 
 void TaskExecutor::CancelAndDrain() {

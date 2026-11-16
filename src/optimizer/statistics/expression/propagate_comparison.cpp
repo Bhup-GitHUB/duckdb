@@ -8,83 +8,59 @@
 
 namespace duckdb {
 
-static Value GetStringStatsMin(const BaseStatistics &stats) {
-	return Value::BLOB_RAW(StringStats::Min(stats));
-}
-
-static Value GetStringStatsMax(const BaseStatistics &stats) {
-	auto max = string(StringStats::Max(stats));
-	if (StringStats::GetMaxType(stats) == StringStatsType::EXACT_STATS) {
-		return Value::BLOB_RAW(std::move(max));
-	}
+static bool TryGetStringStatsMax(const BaseStatistics &stats, string &max) {
+	max = string(StringStats::Max(stats));
 	// A truncated max stores a prefix. Use the next prefix as its upper bound.
-	if (StringUtil::FindNextPrefix(max)) {
-		return Value::BLOB_RAW(std::move(max));
-	}
-	return Value();
+	return StringStats::GetMaxType(stats) == StringStatsType::EXACT_STATS || StringUtil::FindNextPrefix(max);
 }
 
-static bool RangesDoNotOverlap(const Value &lmin, const Value &lmax, const Value &rmin, const Value &rmax) {
-	return (!lmin.IsNull() && !rmax.IsNull() && lmin > rmax) || (!rmin.IsNull() && !lmax.IsNull() && rmin > lmax);
+template <class T>
+static bool Greater(const T *left, const T *right) {
+	return left && right && GreaterThan::Operation(*left, *right);
 }
 
-static bool RangesAreEqualConstants(const Value &lmin, const Value &lmax, const Value &rmin, const Value &rmax) {
-	return !lmin.IsNull() && !lmax.IsNull() && !rmin.IsNull() && !rmax.IsNull() && lmin == lmax && rmin == rmax &&
-	       lmin == rmin;
+template <class T>
+static bool GreaterOrEqual(const T *left, const T *right) {
+	return left && right && GreaterThanEquals::Operation(*left, *right);
 }
 
-static FilterPropagateResult PropagateValueComparison(const Value &lmin, const Value &lmax, const Value &rmin,
-                                                      const Value &rmax, ExpressionType comparison, bool has_null) {
+template <class T>
+static FilterPropagateResult PropagateRangeComparison(const T *lmin, const T *lmax, const T *rmin, const T *rmax,
+                                                      ExpressionType comparison, bool has_null) {
 	const auto always_true =
 	    has_null ? FilterPropagateResult::FILTER_TRUE_OR_NULL : FilterPropagateResult::FILTER_ALWAYS_TRUE;
 	const auto always_false =
 	    has_null ? FilterPropagateResult::FILTER_FALSE_OR_NULL : FilterPropagateResult::FILTER_ALWAYS_FALSE;
+	const auto disjoint = Greater(lmin, rmax) || Greater(rmin, lmax);
 	switch (comparison) {
 	case ExpressionType::COMPARE_EQUAL:
-		if (RangesDoNotOverlap(lmin, lmax, rmin, rmax)) {
-			return always_false;
-		}
-		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+		return disjoint ? always_false : FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	case ExpressionType::COMPARE_NOTEQUAL:
-		if (RangesAreEqualConstants(lmin, lmax, rmin, rmax)) {
+		if (lmin && lmax && rmin && rmax && Equals::Operation(*lmin, *lmax) && Equals::Operation(*rmin, *rmax) &&
+		    Equals::Operation(*lmin, *rmin)) {
 			return always_false;
 		}
-		if (RangesDoNotOverlap(lmin, lmax, rmin, rmax)) {
-			return always_true;
-		}
-		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+		return disjoint ? always_true : FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	case ExpressionType::COMPARE_GREATERTHAN:
-		if (!lmin.IsNull() && !rmax.IsNull() && lmin > rmax) {
+		if (Greater(lmin, rmax)) {
 			return always_true;
 		}
-		if (!rmin.IsNull() && !lmax.IsNull() && rmin >= lmax) {
-			return always_false;
-		}
-		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+		return GreaterOrEqual(rmin, lmax) ? always_false : FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-		if (!lmin.IsNull() && !rmax.IsNull() && lmin >= rmax) {
+		if (GreaterOrEqual(lmin, rmax)) {
 			return always_true;
 		}
-		if (!rmin.IsNull() && !lmax.IsNull() && rmin > lmax) {
-			return always_false;
-		}
-		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+		return Greater(rmin, lmax) ? always_false : FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	case ExpressionType::COMPARE_LESSTHAN:
-		if (!lmax.IsNull() && !rmin.IsNull() && lmax < rmin) {
+		if (Greater(rmin, lmax)) {
 			return always_true;
 		}
-		if (!lmin.IsNull() && !rmax.IsNull() && lmin >= rmax) {
-			return always_false;
-		}
-		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+		return GreaterOrEqual(lmin, rmax) ? always_false : FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-		if (!lmax.IsNull() && !rmin.IsNull() && lmax <= rmin) {
+		if (GreaterOrEqual(rmin, lmax)) {
 			return always_true;
 		}
-		if (!lmin.IsNull() && !rmax.IsNull() && lmin > rmax) {
-			return always_false;
-		}
-		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+		return Greater(lmin, rmax) ? always_false : FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	default:
 		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	}
@@ -98,52 +74,47 @@ FilterPropagateResult StatisticsPropagator::PropagateComparison(const BaseStatis
 		if (lstats.GetType() != rstats.GetType()) {
 			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 		}
-		Value lmin;
-		Value lmax;
-		Value rmin;
-		Value rmax;
+		string lmax_storage;
+		string rmax_storage;
+		string_t lmin_value;
+		string_t lmax_value;
+		string_t rmin_value;
+		string_t rmax_value;
+		const string_t *lmin = nullptr;
+		const string_t *lmax = nullptr;
+		const string_t *rmin = nullptr;
+		const string_t *rmax = nullptr;
 		if (StringStats::HasMin(lstats)) {
-			lmin = GetStringStatsMin(lstats);
+			lmin_value = StringStats::Min(lstats);
+			lmin = &lmin_value;
 		}
-		if (StringStats::HasMax(lstats)) {
-			lmax = GetStringStatsMax(lstats);
+		if (StringStats::HasMax(lstats) && TryGetStringStatsMax(lstats, lmax_storage)) {
+			lmax_value = lmax_storage;
+			lmax = &lmax_value;
 		}
 		if (StringStats::HasMin(rstats)) {
-			rmin = GetStringStatsMin(rstats);
+			rmin_value = StringStats::Min(rstats);
+			rmin = &rmin_value;
 		}
-		if (StringStats::HasMax(rstats)) {
-			rmax = GetStringStatsMax(rstats);
+		if (StringStats::HasMax(rstats) && TryGetStringStatsMax(rstats, rmax_storage)) {
+			rmax_value = rmax_storage;
+			rmax = &rmax_value;
 		}
-		bool has_null = lstats.CanHaveNull() || rstats.CanHaveNull();
-		return PropagateValueComparison(lmin, lmax, rmin, rmax, comparison, has_null);
+		const bool has_null = lstats.CanHaveNull() || rstats.CanHaveNull();
+		return PropagateRangeComparison(lmin, lmax, rmin, rmax, comparison, has_null);
 	}
-
-	switch (lstats.GetType().InternalType()) {
-	case PhysicalType::BOOL:
-	case PhysicalType::UINT8:
-	case PhysicalType::UINT16:
-	case PhysicalType::UINT32:
-	case PhysicalType::UINT64:
-	case PhysicalType::UINT128:
-	case PhysicalType::INT8:
-	case PhysicalType::INT16:
-	case PhysicalType::INT32:
-	case PhysicalType::INT64:
-	case PhysicalType::INT128:
-	case PhysicalType::FLOAT:
-	case PhysicalType::DOUBLE:
-	case PhysicalType::INTERVAL:
-		break;
-	default:
+	if (lstats.GetStatsType() != StatisticsType::NUMERIC_STATS || !NumericStats::HasMinMax(lstats) ||
+	    !NumericStats::HasMinMax(rstats)) {
 		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	}
-	if (!NumericStats::HasMinMax(lstats) || !NumericStats::HasMinMax(rstats)) {
-		// no stats available: nothing to prune
-		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-	}
-	bool has_null = lstats.CanHaveNull() || rstats.CanHaveNull();
-	return PropagateValueComparison(NumericStats::Min(lstats), NumericStats::Max(lstats), NumericStats::Min(rstats),
-	                                NumericStats::Max(rstats), comparison, has_null);
+	const bool has_null = lstats.CanHaveNull() || rstats.CanHaveNull();
+	return NumericStats::Visit(lstats.GetType().InternalType(), [&]<class T>() {
+		const auto lmin = NumericStats::GetMinUnsafe<T>(lstats);
+		const auto lmax = NumericStats::GetMaxUnsafe<T>(lstats);
+		const auto rmin = NumericStats::GetMinUnsafe<T>(rstats);
+		const auto rmax = NumericStats::GetMaxUnsafe<T>(rstats);
+		return PropagateRangeComparison(&lmin, &lmax, &rmin, &rmax, comparison, has_null);
+	});
 }
 
 unique_ptr<BaseStatistics> StatisticsPropagator::PropagateComparison(BoundFunctionExpression &expr,

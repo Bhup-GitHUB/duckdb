@@ -28,17 +28,14 @@ bool TryEvaluateAtConstants(ClientContext &context, const BoundFunctionExpressio
 
 // Equal bounds need not imply identical inputs for certain types, so we skip this optimization for those values.
 // Floating-point bounds only lose information for the sign of zero.
-bool CanInferConstantFromNumericBounds(const Value &value) {
-	switch (value.type().InternalType()) {
-	case PhysicalType::FLOAT:
-		return value.GetValue<float>() != 0.0F;
-	case PhysicalType::DOUBLE:
-		return value.GetValue<double>() != 0.0;
-	case PhysicalType::INTERVAL:
-		return false;
-	default:
-		return true;
-	}
+bool CanInferConstantFromNumericBounds(const BaseStatistics &stats) {
+	return NumericStats::Visit(stats.GetType().InternalType(), [&]<class T>() {
+		if constexpr (std::is_floating_point_v<T>) {
+			return NumericStats::GetMinUnsafe<T>(stats) != 0;
+		} else {
+			return !std::is_same_v<T, interval_t>;
+		}
+	});
 }
 
 bool IsFiniteBound(const Value &value) {
@@ -62,12 +59,10 @@ bool TryInferConstantBounds(const BaseStatistics &stats, Value &constant) {
 		return false;
 	}
 	if (stats.GetStatsType() == StatisticsType::NUMERIC_STATS && NumericStats::HasMinMax(stats)) {
-		auto min = NumericStats::Min(stats);
-		auto max = NumericStats::Max(stats);
-		if (min != max || !CanInferConstantFromNumericBounds(min)) {
+		if (!NumericStats::IsConstant(stats) || !CanInferConstantFromNumericBounds(stats)) {
 			return false;
 		}
-		constant = std::move(min);
+		constant = NumericStats::Min(stats);
 		return true;
 	}
 	if ((stats.GetType().id() == LogicalTypeId::VARCHAR || stats.GetType().id() == LogicalTypeId::BLOB) &&

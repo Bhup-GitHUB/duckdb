@@ -118,108 +118,66 @@ ScalarFunctionSet NextAfterFun::GetFunctions() {
 //===--------------------------------------------------------------------===//
 // abs
 //===--------------------------------------------------------------------===//
-static unique_ptr<BaseStatistics> PropagateAbsStats(ClientContext &context, FunctionStatisticsInput &input) {
-	auto &child_stats = input.child_stats;
+template <class T>
+static unique_ptr<BaseStatistics> PropagateAbsStats(FunctionStatisticsInput &input) {
+	auto &lstats = input.child_stats[0];
 	auto &expr = input.expr;
-	D_ASSERT(child_stats.size() == 1);
-	// can only propagate stats if the children have stats
-	auto &lstats = child_stats[0];
-	Value new_min, new_max;
-	bool potential_overflow = true;
-	if (NumericStats::HasMinMax(lstats)) {
-		switch (expr.GetReturnType().InternalType()) {
-		case PhysicalType::FLOAT:
-		case PhysicalType::DOUBLE:
-			potential_overflow = false;
-			break;
-		case PhysicalType::INT8:
-			potential_overflow = NumericStats::GetMinUnsafe<int8_t>(lstats) == NumericLimits<int8_t>::Minimum();
-			break;
-		case PhysicalType::INT16:
-			potential_overflow = NumericStats::GetMinUnsafe<int16_t>(lstats) == NumericLimits<int16_t>::Minimum();
-			break;
-		case PhysicalType::INT32:
-			potential_overflow = NumericStats::GetMinUnsafe<int32_t>(lstats) == NumericLimits<int32_t>::Minimum();
-			break;
-		case PhysicalType::INT64:
-			potential_overflow = NumericStats::GetMinUnsafe<int64_t>(lstats) == NumericLimits<int64_t>::Minimum();
-			break;
-		default:
+	auto stats = NumericStats::CreateUnknown(expr.GetReturnType());
+	stats.CopyValidity(lstats);
+	if (!NumericStats::HasMinMax(lstats)) {
+		return stats.ToUnique();
+	}
+	const auto min = NumericStats::GetMinUnsafe<T>(lstats);
+	const auto max = NumericStats::GetMaxUnsafe<T>(lstats);
+	bool changes_values;
+	if constexpr (std::is_floating_point_v<T>) {
+		if (Value::IsNan(min) || Value::IsNan(max)) {
 			return nullptr;
 		}
-	}
-	if (potential_overflow) {
-		new_min = Value(expr.GetReturnType());
-		new_max = Value(expr.GetReturnType());
+		// a zero bound can stand for -0.0, whose sign abs clears
+		changes_values = min <= 0;
 	} else {
-		// no potential overflow
-
-		// compute stats
-		switch (expr.GetReturnType().InternalType()) {
-		case PhysicalType::FLOAT:
-		case PhysicalType::DOUBLE: {
-			auto current_min = NumericStats::Min(lstats).GetValue<double>();
-			auto current_max = NumericStats::Max(lstats).GetValue<double>();
-			if (Value::IsNan(current_min) || Value::IsNan(current_max)) {
-				return nullptr;
-			}
-
-			double min_val, max_val;
-			if (current_min == 0 || current_max == 0) {
-				// Unlike integers, floating point abs cannot be removed for zero: abs(-0.0) clears the sign bit.
-				min_val = AbsOperator::Operation<double, double>(current_min);
-				max_val = AbsOperator::Operation<double, double>(current_max);
-			} else if (current_min < 0 && current_max < 0) {
-				min_val = AbsOperator::Operation<double, double>(current_max);
-				max_val = AbsOperator::Operation<double, double>(current_min);
-			} else if (current_min < 0) {
-				D_ASSERT(current_max >= 0);
-				min_val = 0;
-				max_val = MaxValue(AbsOperator::Operation<double, double>(current_min), current_max);
-			} else {
-				*input.expr_ptr = std::move(input.expr.GetChildrenMutable()[0]);
-				return child_stats[0].ToUnique();
-			}
-			new_min = expr.GetReturnType().InternalType() == PhysicalType::FLOAT
-			              ? Value::FLOAT(static_cast<float>(min_val))
-			              : Value::DOUBLE(min_val);
-			new_max = expr.GetReturnType().InternalType() == PhysicalType::FLOAT
-			              ? Value::FLOAT(static_cast<float>(max_val))
-			              : Value::DOUBLE(max_val);
-			break;
+		if (min == NumericLimits<T>::Minimum()) {
+			return stats.ToUnique();
 		}
-		default: {
-			auto current_min = NumericStats::Min(lstats).GetValue<int64_t>();
-			auto current_max = NumericStats::Max(lstats).GetValue<int64_t>();
-
-			int64_t min_val, max_val;
-			if (current_min < 0 && current_max < 0) {
-				// if both min and max are below zero, then min=abs(cur_max) and max=abs(cur_min)
-				min_val = AbsValue(current_max);
-				max_val = AbsValue(current_min);
-			} else if (current_min < 0) {
-				D_ASSERT(current_max >= 0);
-				// if min is below zero and max is above 0, then min=0 and max=max(cur_max, abs(cur_min))
-				min_val = 0;
-				max_val = MaxValue(AbsValue(current_min), current_max);
-			} else {
-				// if both current_min and current_max are > 0, then the abs is a no-op and can be removed entirely
-				*input.expr_ptr = std::move(input.expr.GetChildrenMutable()[0]);
-				return child_stats[0].ToUnique();
-			}
-			new_min = Value::Numeric(expr.GetReturnType(), min_val);
-			new_max = Value::Numeric(expr.GetReturnType(), max_val);
-			break;
-		}
-		}
-		expr.FunctionMutable().SetFunctionCallback(
-		    ScalarFunction::GetScalarUnaryFunction<AbsOperator>(expr.GetReturnType()));
+		changes_values = min < 0;
 	}
-	auto stats = NumericStats::CreateEmpty(expr.GetReturnType());
-	NumericStats::SetMin(stats, new_min);
-	NumericStats::SetMax(stats, new_max);
-	stats.CopyValidity(lstats);
+	if (!changes_values) {
+		*input.expr_ptr = std::move(input.expr.GetChildrenMutable()[0]);
+		return lstats.ToUnique();
+	}
+	if (max <= 0) {
+		NumericStats::SetMin(stats, AbsOperator::Operation<T, T>(max));
+		NumericStats::SetMax(stats, AbsOperator::Operation<T, T>(min));
+	} else {
+		NumericStats::SetMin(stats, T(0));
+		NumericStats::SetMax(stats, MaxValue(AbsOperator::Operation<T, T>(min), max));
+	}
+	expr.FunctionMutable().SetFunctionCallback(
+	    ScalarFunction::GetScalarUnaryFunction<AbsOperator>(expr.GetReturnType()));
 	return stats.ToUnique();
+}
+
+static unique_ptr<BaseStatistics> PropagateAbsStats(ClientContext &context, FunctionStatisticsInput &input) {
+	D_ASSERT(input.child_stats.size() == 1);
+	switch (input.expr.GetReturnType().InternalType()) {
+	case PhysicalType::INT8:
+		return PropagateAbsStats<int8_t>(input);
+	case PhysicalType::INT16:
+		return PropagateAbsStats<int16_t>(input);
+	case PhysicalType::INT32:
+		return PropagateAbsStats<int32_t>(input);
+	case PhysicalType::INT64:
+		return PropagateAbsStats<int64_t>(input);
+	case PhysicalType::INT128:
+		return PropagateAbsStats<hugeint_t>(input);
+	case PhysicalType::FLOAT:
+		return PropagateAbsStats<float>(input);
+	case PhysicalType::DOUBLE:
+		return PropagateAbsStats<double>(input);
+	default:
+		throw InternalException("abs statistics for an unsupported type");
+	}
 }
 
 template <class OP>

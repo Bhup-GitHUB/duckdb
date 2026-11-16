@@ -415,20 +415,21 @@ void LeastGreatestFunction(DataChunk &args, ExpressionState &state, Vector &resu
 	result.SetVectorType(result_type);
 }
 
-template <class LEAST_GREATER_OP>
-unique_ptr<BaseStatistics> PropagateLeastGreatestStats(ClientContext &context, FunctionStatisticsInput &input) {
-	auto &child_stats = input.child_stats;
-	auto &expr = input.expr;
-	auto &return_type = expr.GetReturnType();
-	if (BaseStatistics::GetStatsType(return_type) != StatisticsType::NUMERIC_STATS ||
-	    return_type.InternalType() == PhysicalType::BOOL) {
-		return nullptr;
-	}
+template <class LEAST_GREATER_OP, class T>
+unique_ptr<BaseStatistics> PropagateLeastGreatestStats(const vector<BaseStatistics> &child_stats,
+                                                       const LogicalType &return_type) {
 	constexpr bool IS_LEAST = std::is_same_v<LEAST_GREATER_OP, LeastOp>;
 
-	auto merge = [](Value &bound, const Value &candidate, bool keep_smaller) {
-		if (bound.IsNull() || (keep_smaller ? candidate < bound : candidate > bound)) {
-			bound = candidate;
+	struct Bound {
+		T value;
+		bool set = false;
+
+		void Merge(T candidate, bool keep_smaller) {
+			if (!set ||
+			    (keep_smaller ? LessThan::Operation(candidate, value) : GreaterThan::Operation(candidate, value))) {
+				value = candidate;
+				set = true;
+			}
 		}
 	};
 
@@ -442,37 +443,34 @@ unique_ptr<BaseStatistics> PropagateLeastGreatestStats(ClientContext &context, F
 	//
 	// If every input can be NULL, a single input may end up deciding the result, so the anchored
 	// side falls back to the opposite aggregation over all inputs
-	Value loose;
-	Value anchored;          // over non-null inputs only
-	Value anchored_fallback; // over all inputs; used only when every input is nullable
+	Bound loose;
+	Bound anchored;          // over non-null inputs only
+	Bound anchored_fallback; // over all inputs; used only when every input is nullable
 	bool has_nonnull_input = false;
 	for (auto &cs : child_stats) {
-		if (cs.GetStatsType() != StatisticsType::NUMERIC_STATS || !NumericStats::HasMinMax(cs)) {
-			return nullptr;
-		}
-		const Value cmin = NumericStats::Min(cs);
-		const Value cmax = NumericStats::Max(cs);
-		const Value &loose_val = IS_LEAST ? cmin : cmax;
-		const Value &anchored_val = IS_LEAST ? cmax : cmin;
+		const auto cmin = NumericStats::GetMinUnsafe<T>(cs);
+		const auto cmax = NumericStats::GetMaxUnsafe<T>(cs);
+		const auto loose_val = IS_LEAST ? cmin : cmax;
+		const auto anchored_val = IS_LEAST ? cmax : cmin;
 
-		merge(loose, loose_val, /*keep_smaller=*/IS_LEAST);
-		merge(anchored_fallback, anchored_val, /*keep_smaller=*/!IS_LEAST);
+		loose.Merge(loose_val, /*keep_smaller=*/IS_LEAST);
+		anchored_fallback.Merge(anchored_val, /*keep_smaller=*/!IS_LEAST);
 		if (!cs.CanHaveNull()) {
 			has_nonnull_input = true;
-			merge(anchored, anchored_val, /*keep_smaller=*/IS_LEAST);
+			anchored.Merge(anchored_val, /*keep_smaller=*/IS_LEAST);
 		}
 	}
 	if (!has_nonnull_input) {
-		anchored = std::move(anchored_fallback);
+		anchored = anchored_fallback;
 	}
 
 	auto result = NumericStats::CreateEmpty(return_type);
 	if constexpr (IS_LEAST) {
-		NumericStats::SetMin(result, loose);
-		NumericStats::SetMax(result, anchored);
+		NumericStats::SetMin(result, loose.value);
+		NumericStats::SetMax(result, anchored.value);
 	} else {
-		NumericStats::SetMin(result, anchored);
-		NumericStats::SetMax(result, loose);
+		NumericStats::SetMin(result, anchored.value);
+		NumericStats::SetMax(result, loose.value);
 	}
 	result.Set(StatsInfo::CAN_HAVE_VALID_VALUES);
 	if (!has_nonnull_input) {
@@ -480,6 +478,24 @@ unique_ptr<BaseStatistics> PropagateLeastGreatestStats(ClientContext &context, F
 		result.Set(StatsInfo::CAN_HAVE_NULL_VALUES);
 	}
 	return result.ToUnique();
+}
+
+template <class LEAST_GREATER_OP>
+unique_ptr<BaseStatistics> PropagateLeastGreatestStats(ClientContext &context, FunctionStatisticsInput &input) {
+	auto &child_stats = input.child_stats;
+	auto &return_type = input.expr.GetReturnType();
+	if (BaseStatistics::GetStatsType(return_type) != StatisticsType::NUMERIC_STATS ||
+	    return_type.InternalType() == PhysicalType::BOOL) {
+		return nullptr;
+	}
+	for (auto &cs : child_stats) {
+		if (cs.GetStatsType() != StatisticsType::NUMERIC_STATS || !NumericStats::HasMinMax(cs)) {
+			return nullptr;
+		}
+	}
+	return NumericStats::Visit(return_type.InternalType(), [&]<class T>() {
+		return PropagateLeastGreatestStats<LEAST_GREATER_OP, T>(child_stats, return_type);
+	});
 }
 
 template <class LEAST_GREATER_OP>

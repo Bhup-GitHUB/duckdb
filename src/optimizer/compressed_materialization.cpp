@@ -1,7 +1,7 @@
 #include "duckdb/optimizer/compressed_materialization.hpp"
 
-#include "duckdb/common/exception/conversion_exception.hpp"
-#include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
+#include "duckdb/common/operator/subtract.hpp"
 #include "duckdb/function/cast/cast_function_set.hpp"
 #include "duckdb/function/scalar/compressed_materialization_utils.hpp"
 #include "duckdb/function/scalar/nested_functions.hpp"
@@ -78,14 +78,11 @@ struct CMHelper {
 	static void AddCompressProjectionStats(statistics_map_t &statistics_map, const vector<ColumnBinding> &bindings,
 	                                       vector<unique_ptr<CompressExpression>> &compress_exprs);
 
-	static Value GetIntegralRangeValue(ClientContext &context, const LogicalType &type, const BaseStatistics &stats);
 	static LogicalType GetIntegralOffsetType(uint64_t range);
-	static bool GetIntegralOffsetCompressInfo(ClientContext &context, const LogicalType &type,
-	                                          const BaseStatistics &stats, LogicalType &offset_type, Value &min,
-	                                          Value &range_value);
+	static bool GetIntegralOffsetCompressInfo(const LogicalType &type, const BaseStatistics &stats,
+	                                          LogicalType &offset_type, Value &min, uint64_t &range);
 	static LogicalType GetSameWidthIntegralType(const LogicalType &type, bool use_signed);
-	static bool ValuePreservingCastFits(const Value &value, const LogicalType &source_type,
-	                                    const LogicalType &target_type);
+	static bool IntegralRangeFits(hugeint_t min, hugeint_t max, const LogicalType &target_type);
 	static LogicalType GetIntegralCastType(const LogicalType &source_type, const LogicalType &offset_type,
 	                                       const BaseStatistics &stats);
 	static unique_ptr<CompressExpression> CreateIntegralCastCompress(ClientContext &context,
@@ -95,7 +92,7 @@ struct CMHelper {
 	static unique_ptr<CompressExpression> CreateIntegralFunctionCompress(unique_ptr<Expression> input,
 	                                                                     const LogicalType &source_type,
 	                                                                     const LogicalType &target_type,
-	                                                                     const Value &min, const Value &range_value,
+	                                                                     const Value &min, uint64_t range,
 	                                                                     const BaseStatistics &stats);
 
 	static unique_ptr<BaseStatistics> CreateStringCompressStats(const BaseStatistics &stats, LogicalType &target_type,
@@ -187,27 +184,6 @@ void CMHelper::AddCompressProjectionStats(statistics_map_t &statistics_map, cons
 	}
 }
 
-Value CMHelper::GetIntegralRangeValue(ClientContext &context, const LogicalType &type, const BaseStatistics &stats) {
-	auto min = NumericStats::Min(stats);
-	auto max = NumericStats::Max(stats);
-	if (max < min) {
-		return Value::UHUGEINT(NumericLimits<uhugeint_t>::Maximum());
-	}
-
-	vector<unique_ptr<Expression>> arguments;
-	arguments.emplace_back(make_uniq<BoundConstantExpression>(max));
-	arguments.emplace_back(make_uniq<BoundConstantExpression>(min));
-
-	auto sub = SubtractFunction::GetFunction(type, type).Bind(context, std::move(arguments));
-
-	Value result;
-	if (ExpressionExecutor::TryEvaluateFoldable(context, *sub, result)) {
-		return result;
-	}
-	// Couldn't evaluate: Return max uhugeint as range so GetIntegralCompress will return nullptr
-	return Value::UHUGEINT(NumericLimits<uhugeint_t>::Maximum());
-}
-
 LogicalType CMHelper::GetIntegralOffsetType(const uint64_t range) {
 	if (range <= NumericLimits<uint8_t>().Maximum()) {
 		return LogicalType::UTINYINT;
@@ -222,28 +198,24 @@ LogicalType CMHelper::GetIntegralOffsetType(const uint64_t range) {
 	return LogicalType::UBIGINT;
 }
 
-bool CMHelper::GetIntegralOffsetCompressInfo(ClientContext &context, const LogicalType &type,
-                                             const BaseStatistics &stats, LogicalType &offset_type, Value &min,
-                                             Value &range_value) {
+bool CMHelper::GetIntegralOffsetCompressInfo(const LogicalType &type, const BaseStatistics &stats,
+                                             LogicalType &offset_type, Value &min, uint64_t &range) {
 	if (!stats.CanHaveNoNull()) {
 		// All NULL
 		offset_type = LogicalType::UTINYINT;
-		range_value = Value::UTINYINT(0);
+		range = 0;
 		min = Value(type);
 		return true;
 	}
-	if (!NumericStats::HasMinMax(stats)) {
+	// The range must fit UBIGINT (it does not for wide HUGEINT ranges, in which case we just return)
+	hugeint_t lower;
+	hugeint_t upper;
+	hugeint_t span;
+	if (!NumericStats::TryCastRange(stats, lower, upper) || !TrySubtractOperator::Operation(upper, lower, span) ||
+	    !TryCast::Operation(span, range)) {
 		return false;
 	}
-
-	// Get range and cast to UBIGINT (might fail for HUGEINT, in which case we just return)
-	range_value = GetIntegralRangeValue(context, type, stats);
-	auto range_ubigint = range_value.DefaultTryCastAs(LogicalType::UBIGINT);
-	if (!range_ubigint) {
-		return false;
-	}
-	range_value = std::move(*range_ubigint);
-	offset_type = GetIntegralOffsetType(UBigIntValue::Get(range_value));
+	offset_type = GetIntegralOffsetType(range);
 	min = NumericStats::Min(stats);
 	return true;
 }
@@ -263,22 +235,11 @@ LogicalType CMHelper::GetSameWidthIntegralType(const LogicalType &type, const bo
 	}
 }
 
-bool CMHelper::ValuePreservingCastFits(const Value &value, const LogicalType &source_type,
-                                       const LogicalType &target_type) {
-	optional<Value> roundtrip_value;
-	try {
-		auto cast_value = value.DefaultTryCastAs(target_type, nullptr, true);
-		if (!cast_value) {
-			return false;
-		}
-		roundtrip_value = cast_value->DefaultTryCastAs(source_type, nullptr, true);
-		if (!roundtrip_value) {
-			return false;
-		}
-	} catch (ConversionException &) {
-		return false;
-	}
-	return value == *roundtrip_value;
+bool CMHelper::IntegralRangeFits(hugeint_t min, hugeint_t max, const LogicalType &target_type) {
+	const auto bits = GetTypeIdSize(target_type.InternalType()) * 8;
+	const auto lowest = target_type.IsSigned() ? -(hugeint_t(1) << (bits - 1)) : hugeint_t(0);
+	const auto highest = (hugeint_t(1) << (target_type.IsSigned() ? bits - 1 : bits)) - 1;
+	return min >= lowest && max <= highest;
 }
 
 LogicalType CMHelper::GetIntegralCastType(const LogicalType &source_type, const LogicalType &offset_type,
@@ -292,19 +253,17 @@ LogicalType CMHelper::GetIntegralCastType(const LogicalType &source_type, const 
 	if (!stats.CanHaveNoNull()) {
 		return preferred_type;
 	}
-	if (!NumericStats::HasMinMax(stats)) {
+	hugeint_t min;
+	hugeint_t max;
+	if (!NumericStats::TryCastRange(stats, min, max)) {
 		return LogicalType::INVALID;
 	}
 
 	auto alternate_type = GetSameWidthIntegralType(offset_type, !preferred_signed);
-	const auto min = NumericStats::Min(stats);
-	const auto max = NumericStats::Max(stats);
-	if (preferred_type.IsValid() && ValuePreservingCastFits(min, source_type, preferred_type) &&
-	    ValuePreservingCastFits(max, source_type, preferred_type)) {
+	if (preferred_type.IsValid() && IntegralRangeFits(min, max, preferred_type)) {
 		return preferred_type;
 	}
-	if (alternate_type.IsValid() && ValuePreservingCastFits(min, source_type, alternate_type) &&
-	    ValuePreservingCastFits(max, source_type, alternate_type)) {
+	if (alternate_type.IsValid() && IntegralRangeFits(min, max, alternate_type)) {
 		return alternate_type;
 	}
 	return LogicalType::INVALID;
@@ -330,7 +289,7 @@ unique_ptr<CompressExpression> CMHelper::CreateIntegralCastCompress(ClientContex
 unique_ptr<CompressExpression> CMHelper::CreateIntegralFunctionCompress(unique_ptr<Expression> input,
                                                                         const LogicalType &source_type,
                                                                         const LogicalType &target_type,
-                                                                        const Value &min, const Value &range_value,
+                                                                        const Value &min, const uint64_t range,
                                                                         const BaseStatistics &stats) {
 	// the compression functions are registered for (de)serialization only - their bind throws, so they are
 	// constructed and specialized here rather than resolved through the catalog
@@ -345,8 +304,12 @@ unique_ptr<CompressExpression> CMHelper::CreateIntegralFunctionCompress(unique_p
 
 	auto compress_stats = BaseStatistics::CreateEmpty(target_type);
 	compress_stats.CopyBase(stats);
-	NumericStats::SetMin(compress_stats, Value(0).DefaultCastAs(target_type));
-	NumericStats::SetMax(compress_stats, range_value.DefaultCastAs(target_type));
+	NumericStats::Visit(target_type.InternalType(), [&]<class T>() {
+		if constexpr (std::is_unsigned_v<T> && !std::is_same_v<T, bool>) {
+			NumericStats::SetMin<T>(compress_stats, 0);
+			NumericStats::SetMax<T>(compress_stats, UnsafeNumericCast<T>(range));
+		}
+	});
 
 	return make_uniq<CompressExpression>(std::move(compress_expr), compress_stats.ToUnique(),
 	                                     CompressedMaterializationType::FUNCTION);
@@ -746,9 +709,9 @@ unique_ptr<CompressExpression> CompressedMaterialization::GetIntegralCompress(un
 	}
 
 	LogicalType cast_type;
-	Value range_value;
+	uint64_t range;
 	Value min;
-	if (!CMHelper::GetIntegralOffsetCompressInfo(context, type, stats, cast_type, min, range_value)) {
+	if (!CMHelper::GetIntegralOffsetCompressInfo(type, stats, cast_type, min, range)) {
 		// We don't have enough stats to do anything
 		return nullptr;
 	}
@@ -767,7 +730,7 @@ unique_ptr<CompressExpression> CompressedMaterialization::GetIntegralCompress(un
 		}
 	}
 
-	return CMHelper::CreateIntegralFunctionCompress(std::move(input), type, cast_type, min, range_value, stats);
+	return CMHelper::CreateIntegralFunctionCompress(std::move(input), type, cast_type, min, range, stats);
 }
 
 unique_ptr<BaseStatistics> CMHelper::CreateStringCompressStats(const BaseStatistics &stats, LogicalType &target_type,
@@ -976,15 +939,14 @@ unique_ptr<CompressExpression> CompressedMaterialization::GetVariantCompress(uni
 	// Try to compress the shredded type further using the typed statistics
 	if (shredded_type.IsIntegral() && GetTypeIdSize(shredded_type.InternalType()) > 1) {
 		LogicalType offset_type;
-		Value range_value;
+		uint64_t range;
 		Value min;
-		if (CMHelper::GetIntegralOffsetCompressInfo(context, shredded_type, *typed_stats, offset_type, min,
-		                                            range_value) &&
+		if (CMHelper::GetIntegralOffsetCompressInfo(shredded_type, *typed_stats, offset_type, min, range) &&
 		    GetTypeIdSize(offset_type.InternalType()) < GetTypeIdSize(shredded_type.InternalType())) {
 			// We always use the offset compress function (not a value-preserving cast) so that decompression
 			// can unambiguously derive how to restore the shredded type from the statistics alone
 			return CMHelper::CreateIntegralFunctionCompress(std::move(cast_expr), shredded_type, offset_type, min,
-			                                                range_value, *typed_stats);
+			                                                range, *typed_stats);
 		}
 	} else if (shredded_type.id() == LogicalTypeId::VARCHAR) {
 		LogicalType string_type = LogicalType::INVALID;

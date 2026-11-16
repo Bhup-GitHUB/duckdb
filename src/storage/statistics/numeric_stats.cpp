@@ -24,49 +24,13 @@ void InitializeEmptyFloatingPointStats(BaseStatistics &result) {
 	NumericStats::SetMax(result, NumericLimits<T>::Minimum());
 }
 
-template <class OP>
-auto VisitNumeric(PhysicalType type, OP &&op) {
-	switch (type) {
-	case PhysicalType::BOOL:
-		return op.template operator()<bool>();
-	case PhysicalType::INT8:
-		return op.template operator()<int8_t>();
-	case PhysicalType::INT16:
-		return op.template operator()<int16_t>();
-	case PhysicalType::INT32:
-		return op.template operator()<int32_t>();
-	case PhysicalType::INT64:
-		return op.template operator()<int64_t>();
-	case PhysicalType::UINT8:
-		return op.template operator()<uint8_t>();
-	case PhysicalType::UINT16:
-		return op.template operator()<uint16_t>();
-	case PhysicalType::UINT32:
-		return op.template operator()<uint32_t>();
-	case PhysicalType::UINT64:
-		return op.template operator()<uint64_t>();
-	case PhysicalType::INT128:
-		return op.template operator()<hugeint_t>();
-	case PhysicalType::UINT128:
-		return op.template operator()<uhugeint_t>();
-	case PhysicalType::FLOAT:
-		return op.template operator()<float>();
-	case PhysicalType::DOUBLE:
-		return op.template operator()<double>();
-	case PhysicalType::INTERVAL:
-		return op.template operator()<interval_t>();
-	default:
-		throw InternalException("Unsupported type %s for numeric statistics", TypeIdToString(type));
-	}
-}
-
 template <class T>
 bool TryCastBounds(const BaseStatistics &stats, T &min, T &max) {
 	if (!NumericStats::HasMinMax(stats)) {
 		return false;
 	}
 	const auto &type = stats.GetType();
-	return VisitNumeric(type.InternalType(), [&]<class S>() {
+	return NumericStats::Visit(type.InternalType(), [&]<class S>() {
 		if constexpr (std::is_same_v<S, interval_t>) {
 			return false;
 		} else {
@@ -142,7 +106,7 @@ void NumericStats::Merge(BaseStatistics &stats, const BaseStatistics &other) {
 	D_ASSERT(stats.GetType() == other.GetType());
 	auto &data = GetDataUnsafe(stats);
 	const auto &other_data = GetDataUnsafe(other);
-	VisitNumeric(stats.GetType().InternalType(), [&]<class T>() {
+	Visit(stats.GetType().InternalType(), [&]<class T>() {
 		// If the min and max of the stats are not valid, we need to merge the min and max of the other stats.
 		if (HasMin(stats) && HasMax(stats) && GreaterThan::Operation(GetMinUnsafe<T>(stats), GetMaxUnsafe<T>(stats))) {
 			data.has_min = HasMin(other);
@@ -170,7 +134,7 @@ void NumericStats::Merge(BaseStatistics &stats, const BaseStatistics &other) {
 
 void NumericStats::ClampMin(BaseStatistics &stats, const BaseStatistics &other) {
 	D_ASSERT(stats.GetType() == other.GetType() && HasMin(stats) && HasMin(other));
-	VisitNumeric(stats.GetType().InternalType(), [&]<class T>() {
+	Visit(stats.GetType().InternalType(), [&]<class T>() {
 		if (LessThan::Operation(GetMinUnsafe<T>(stats), GetMinUnsafe<T>(other))) {
 			GetDataUnsafe(stats).min = GetDataUnsafe(other).min;
 		}
@@ -179,7 +143,7 @@ void NumericStats::ClampMin(BaseStatistics &stats, const BaseStatistics &other) 
 
 void NumericStats::ClampMax(BaseStatistics &stats, const BaseStatistics &other) {
 	D_ASSERT(stats.GetType() == other.GetType() && HasMax(stats) && HasMax(other));
-	VisitNumeric(stats.GetType().InternalType(), [&]<class T>() {
+	Visit(stats.GetType().InternalType(), [&]<class T>() {
 		if (GreaterThan::Operation(GetMaxUnsafe<T>(stats), GetMaxUnsafe<T>(other))) {
 			GetDataUnsafe(stats).max = GetDataUnsafe(other).max;
 		}
@@ -211,38 +175,8 @@ FilterPropagateResult NumericStats::CheckZonemap(const BaseStatistics &stats, Ex
 		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	}
 	D_ASSERT(stats.CanHaveNoNull());
-	switch (stats.GetType().InternalType()) {
-	case PhysicalType::BOOL:
-		return CheckZonemapTemplated<bool>(stats, comparison_type, constants);
-	case PhysicalType::INT8:
-		return CheckZonemapTemplated<int8_t>(stats, comparison_type, constants);
-	case PhysicalType::INT16:
-		return CheckZonemapTemplated<int16_t>(stats, comparison_type, constants);
-	case PhysicalType::INT32:
-		return CheckZonemapTemplated<int32_t>(stats, comparison_type, constants);
-	case PhysicalType::INT64:
-		return CheckZonemapTemplated<int64_t>(stats, comparison_type, constants);
-	case PhysicalType::UINT8:
-		return CheckZonemapTemplated<uint8_t>(stats, comparison_type, constants);
-	case PhysicalType::UINT16:
-		return CheckZonemapTemplated<uint16_t>(stats, comparison_type, constants);
-	case PhysicalType::UINT32:
-		return CheckZonemapTemplated<uint32_t>(stats, comparison_type, constants);
-	case PhysicalType::UINT64:
-		return CheckZonemapTemplated<uint64_t>(stats, comparison_type, constants);
-	case PhysicalType::INT128:
-		return CheckZonemapTemplated<hugeint_t>(stats, comparison_type, constants);
-	case PhysicalType::UINT128:
-		return CheckZonemapTemplated<uhugeint_t>(stats, comparison_type, constants);
-	case PhysicalType::FLOAT:
-		return CheckZonemapTemplated<float>(stats, comparison_type, constants);
-	case PhysicalType::DOUBLE:
-		return CheckZonemapTemplated<double>(stats, comparison_type, constants);
-	case PhysicalType::INTERVAL:
-		return CheckZonemapTemplated<interval_t>(stats, comparison_type, constants);
-	default:
-		throw InternalException("Unsupported type for NumericStats::CheckZonemap");
-	}
+	return Visit(stats.GetType().InternalType(),
+	             [&]<class T>() { return CheckZonemapTemplated<T>(stats, comparison_type, constants); });
 }
 
 bool NumericStats::ConstantsCoverRange(const BaseStatistics &stats, array_ptr<const Value> constants) {
@@ -286,7 +220,7 @@ bool NumericStats::IsConstant(const BaseStatistics &stats) {
 	if (!HasMin(stats) || !HasMax(stats)) {
 		throw InternalException("IsConstant() called on statistics that does not have min and max");
 	}
-	return VisitNumeric(stats.GetType().InternalType(), [&]<class T>() {
+	return Visit(stats.GetType().InternalType(), [&]<class T>() {
 		const auto min = GetMinUnsafe<T>(stats);
 		const auto max = GetMaxUnsafe<T>(stats);
 		if (GreaterThan::Operation(max, min)) {
@@ -408,7 +342,7 @@ Value NumericValueUnionToValue(const LogicalType &type, const NumericValueUnion 
 }
 
 bool NumericStats::HasMinMax(const BaseStatistics &stats) {
-	return HasMin(stats) && HasMax(stats) && VisitNumeric(stats.GetType().InternalType(), [&]<class T>() {
+	return HasMin(stats) && HasMax(stats) && Visit(stats.GetType().InternalType(), [&]<class T>() {
 		       return LessThanEquals::Operation(GetMinUnsafe<T>(stats), GetMaxUnsafe<T>(stats));
 	       });
 }

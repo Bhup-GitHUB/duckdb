@@ -1,0 +1,91 @@
+# name: test/sql/function/numeric/abs_statistics.test
+# description: abs() propagates the range of its input's statistics, or drops itself where it changes no value
+# group: [numeric]
+
+statement ok
+CREATE TABLE d AS SELECT * FROM (VALUES (-5.0::DOUBLE), (0.0::DOUBLE)) v(x);
+
+query I
+SELECT stats(abs(x)) FROM d LIMIT 1
+----
+{'has_no_null': true, 'has_null': false, 'max': 5, 'min': 0}
+
+query I
+SELECT count(*) FROM d WHERE abs(x) >= 4
+----
+1
+
+statement ok
+CREATE TABLE dz AS SELECT * FROM (VALUES ('-0.0'::DOUBLE), (3.0::DOUBLE)) v(x);
+
+query I
+SELECT stats(abs(x)) FROM dz LIMIT 1
+----
+{'has_no_null': true, 'has_null': false, 'max': 3, 'min': 0}
+
+query II
+SELECT signbit(x), signbit(abs(x)) FROM dz ORDER BY x
+----
+true	false
+false	false
+
+statement ok
+CREATE TABLE dn AS SELECT * FROM (VALUES (-7.5::FLOAT), (-2.5::FLOAT)) v(x);
+
+query I
+SELECT stats(abs(x)) FROM dn LIMIT 1
+----
+{'has_no_null': true, 'has_null': false, 'max': 7.5, 'min': 2.5}
+
+statement ok
+CREATE TABLE dp AS SELECT * FROM (VALUES (2.0::DOUBLE), (5.0::DOUBLE)) v(x);
+
+query I
+SELECT stats(abs(x)) FROM dp LIMIT 1
+----
+{'approx_unique': 2, 'has_no_null': true, 'has_null': false, 'max': 5, 'min': 2}
+
+statement ok
+CREATE TABLE i AS SELECT * FROM (VALUES (-5::INTEGER), (3::INTEGER)) v(x);
+
+query I
+SELECT stats(abs(x)) FROM i LIMIT 1
+----
+{'has_no_null': true, 'has_null': false, 'max': 5, 'min': 0}
+
+statement ok
+CREATE TABLE ineg AS SELECT * FROM (VALUES (-7::BIGINT), (-2::BIGINT), (NULL)) v(x);
+
+query I
+SELECT stats(abs(x)) FROM ineg LIMIT 1
+----
+{'has_no_null': true, 'has_null': true, 'max': 7, 'min': 2}
+
+statement ok
+CREATE TABLE imin AS SELECT * FROM (VALUES ((-128)::TINYINT), (3::TINYINT)) v(x);
+
+statement error
+SELECT abs(x) FROM imin
+----
+Overflow on abs
+
+statement ok
+CREATE TABLE h AS SELECT * FROM (VALUES (-5::HUGEINT), (3::HUGEINT)) v(x);
+
+query I
+SELECT stats(abs(x)) FROM h LIMIT 1
+----
+{'has_no_null': true, 'has_null': false, 'max': 5, 'min': 0}
+
+query I
+SELECT sum(abs(x)) FROM h
+----
+8
+
+statement ok
+CREATE TABLE nan AS SELECT * FROM (VALUES ('nan'::DOUBLE), (1.0::DOUBLE)) v(x);
+
+query I
+SELECT stats(abs(x)) FROM nan LIMIT 1
+----
+{'has_no_null': true, 'has_null': true}

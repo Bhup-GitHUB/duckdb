@@ -22,8 +22,6 @@ struct ExpressionFilterExecutor {
 
 	virtual idx_t FilterSelection(SelectionVector &sel, Vector &vector, idx_t scan_count,
 	                              idx_t &approved_tuple_count) = 0;
-	//! Clears the bits of `mask`, one per row of the first `count` (at most STANDARD_VECTOR_SIZE) rows of `vector`,
-	//! whose rows fail the filter, and the bits past `count` in its last word
 	virtual void FilterMask(Vector &vector, idx_t count, uint64_t *mask);
 
 	virtual bool FiltersValues() const {

@@ -64,7 +64,6 @@ void ExpressionFilterExecutor::FilterMask(Vector &vector, idx_t count, uint64_t 
 	}
 }
 
-//! Appends the positions of the set bits of the first `count` rows' mask to `sel`
 static idx_t MaskToSelection(const uint64_t *mask, idx_t count, sel_t *sel) {
 	idx_t result_count = 0;
 	for (idx_t w = 0; w < (count + 63) / 64; w++) {
@@ -160,7 +159,6 @@ static auto DispatchComparison(ExpressionType comparison, FUNC &func) {
 	}
 }
 
-//! Calls `func.template operator()<T, OP>()` with the C++ type of `type` and the operator of `comparison`
 template <class FUNC>
 static auto DispatchComparison(PhysicalType type, ExpressionType comparison, FUNC &&func) {
 	switch (type) {

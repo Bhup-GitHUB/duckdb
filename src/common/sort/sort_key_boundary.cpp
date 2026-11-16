@@ -168,6 +168,41 @@ const int8_t *SortKeyBoundaryFilter::DictionaryOrders(const Vector &input, idx_t
 	return FlatVector::GetData<int8_t>(*dictionary_orders);
 }
 
+idx_t SortKeyBoundaryFilter::Admit(DataChunk &keys, SelectionVector &sel) {
+	D_ASSERT(is_set);
+	const auto count = keys.size();
+	boundary_values.SetChildCardinality(count);
+	const auto after_order = modifiers[0].order_type == OrderType::DESCENDING ? int8_t(-1) : int8_t(1);
+	auto &input = keys.data[0];
+	bool any_after = false;
+	bool any_tie = false;
+	if (const auto orders = DictionaryOrders(input, count)) {
+		const auto &rows = DictionaryVector::SelVector(input);
+		for (idx_t i = 0; i < count; i++) {
+			const auto order = orders[rows.get_index(i)];
+			any_after |= order == after_order;
+			any_tie |= order == 0;
+		}
+	} else {
+		comparison.ResetFromCache(comparison_cache);
+		Compare(input, 0, comparison, count);
+		if (comparison.GetVectorType() != VectorType::FLAT_VECTOR) {
+			idx_t before;
+			return Select(keys, true, sel, before);
+		}
+		const auto compared = FlatVector::GetData<int8_t>(comparison);
+		for (idx_t i = 0; i < count; i++) {
+			any_after |= compared[i] == after_order;
+			any_tie |= compared[i] == 0;
+		}
+	}
+	if (!any_after && (!any_tie || modifiers.size() == 1)) {
+		return count;
+	}
+	idx_t before;
+	return Select(keys, true, sel, before);
+}
+
 idx_t SortKeyBoundaryFilter::Select(DataChunk &keys, bool inclusive, SelectionVector &sel, idx_t &before) {
 	D_ASSERT(is_set);
 	boundary_values.SetChildCardinality(keys.size());

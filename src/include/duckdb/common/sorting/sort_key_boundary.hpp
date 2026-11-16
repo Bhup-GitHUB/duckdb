@@ -56,6 +56,7 @@ public:
 
 	bool Refresh(const SortKeyBoundary &boundary);
 	idx_t Select(DataChunk &keys, bool inclusive, SelectionVector &sel, idx_t &before);
+	idx_t Admit(DataChunk &keys, SelectionVector &sel);
 	const string &Key() const {
 		return key;
 	}

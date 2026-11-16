@@ -118,6 +118,7 @@ public:
 	optional_idx TryAddCompressedGroups(DataChunk &groups, DataChunk &payload, const unsafe_vector<idx_t> &filter);
 	optional_idx TryAddDictionaryGroups(DataChunk &groups, DataChunk &payload, const unsafe_vector<idx_t> &filter);
 	optional_idx TryAddConstantGroups(DataChunk &groups, DataChunk &payload, const unsafe_vector<idx_t> &filter);
+	void SliceNewGroups(DataChunk &result, idx_t new_group_count);
 
 	//! Fetch the aggregates for specific groups from the HT and place them in the result
 	void FetchAggregates(DataChunk &groups, DataChunk &result);
@@ -261,6 +262,8 @@ private:
 		PartitionedTupleDataAppendState unpartitioned_append_state;
 
 		SelectionVector new_groups;
+		optional_ptr<DataChunk> created_from;
+		optional_ptr<const SelectionVector> created;
 		AggregateDictionaryState dict_state;
 
 		bool run_repeats[STANDARD_VECTOR_SIZE];

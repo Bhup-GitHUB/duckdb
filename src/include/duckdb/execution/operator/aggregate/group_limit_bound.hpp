@@ -61,13 +61,15 @@ public:
 	GroupLimitBoundSink(Allocator &allocator, const GroupLimitBound &bound);
 
 	idx_t Select(GroupLimitBound &bound, DataChunk &groups, SelectionVector &sel);
+	void AddCandidates(GroupLimitBound &bound, DataChunk &groups);
 
 private:
-	void AddCandidates(GroupLimitBound &bound);
 	void Compact(idx_t limit);
 
 	SortKeyBoundaryFilter filter;
 	DataChunk ordered;
+	bool filtered = false;
+	SelectionVector candidate_sel;
 	DataChunk candidate_groups;
 	VectorCache keys_cache;
 	Vector keys;

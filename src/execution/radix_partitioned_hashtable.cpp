@@ -517,6 +517,7 @@ public:
 	DataChunk admitted_groups;
 	DataChunk admitted_payload;
 	unique_ptr<GroupLimitBoundSink> bound;
+	DataChunk created_groups;
 };
 
 RadixHTLocalSinkState::RadixHTLocalSinkState(ClientContext &, const RadixPartitionedHashTable &radix_ht)
@@ -1064,18 +1065,21 @@ void RadixPartitionedHashTable::Sink(ExecutionContext &context, DataChunk &chunk
 	auto &ht = *lstate.ht;
 	if (op.group_limit.limit.IsValid() && (gstate.group_bound || op.group_limit.columns.empty())) {
 		idx_t admitted;
+		optional_ptr<GroupLimitBoundSink> bound;
 		if (gstate.group_bound && !gstate.frozen.load(std::memory_order_acquire)) {
 			if (!lstate.bound) {
 				lstate.bound =
 				    make_uniq<GroupLimitBoundSink>(BufferAllocator::Get(context.client), *gstate.group_bound);
 			}
-			admitted = lstate.bound->Select(*gstate.group_bound, group_chunk, lstate.admitted_sel);
+			bound = lstate.bound.get();
+			admitted = bound->Select(*gstate.group_bound, group_chunk, lstate.admitted_sel);
 		} else {
 			admitted = AdmitGroups(context.client, *this, gstate, lstate, group_chunk);
 		}
 		if (admitted == 0) {
 			return;
 		}
+		idx_t new_groups;
 		if (admitted < group_chunk.size()) {
 			if (lstate.admitted_groups.ColumnCount() == 0) {
 				lstate.admitted_groups.InitializeEmpty(group_chunk.GetTypes());
@@ -1083,9 +1087,16 @@ void RadixPartitionedHashTable::Sink(ExecutionContext &context, DataChunk &chunk
 			}
 			lstate.admitted_groups.Slice(group_chunk, lstate.admitted_sel, admitted);
 			lstate.admitted_payload.Slice(payload_input, lstate.admitted_sel, admitted);
-			ht.AddChunk(lstate.admitted_groups, lstate.admitted_payload, filter);
+			new_groups = ht.AddChunk(lstate.admitted_groups, lstate.admitted_payload, filter);
 		} else {
-			ht.AddChunk(group_chunk, payload_input, filter);
+			new_groups = ht.AddChunk(group_chunk, payload_input, filter);
+		}
+		if (bound && new_groups != 0) {
+			if (lstate.created_groups.ColumnCount() == 0) {
+				lstate.created_groups.InitializeEmpty(group_chunk.GetTypes());
+			}
+			ht.SliceNewGroups(lstate.created_groups, new_groups);
+			bound->AddCandidates(*gstate.group_bound, lstate.created_groups);
 		}
 	} else {
 		ht.AddChunk(group_chunk, payload_input, filter);

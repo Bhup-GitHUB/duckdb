@@ -701,6 +701,11 @@ optional_idx GroupedAggregateHashTable::TryAddConstantGroups(DataChunk &groups, 
 	return new_group_count;
 }
 
+void GroupedAggregateHashTable::SliceNewGroups(DataChunk &result, idx_t new_group_count) {
+	D_ASSERT(state.created_from && state.created);
+	result.Slice(*state.created_from, *state.created, new_group_count);
+}
+
 optional_idx GroupedAggregateHashTable::TryAddCompressedGroups(DataChunk &groups, DataChunk &payload,
                                                                const unsafe_vector<idx_t> &filter) {
 	// all groups must be compressed
@@ -1010,6 +1015,8 @@ idx_t GroupedAggregateHashTable::FindOrCreateGroupsInternal(DataChunk &groups, V
 	D_ASSERT(state.initialized && state.owner.get() == this);
 	D_ASSERT(groups.ColumnCount() + 1 == layout_ptr->ColumnCount());
 	D_ASSERT(group_hashes_v.GetType() == LogicalType::HASH);
+	state.created_from = &groups;
+	state.created = &new_groups_out;
 	D_ASSERT(state.ht_offsets.GetVectorType() == VectorType::FLAT_VECTOR);
 	D_ASSERT(state.ht_offsets.GetType() == LogicalType::UBIGINT);
 	D_ASSERT(addresses_v.GetType() == LogicalType::POINTER);

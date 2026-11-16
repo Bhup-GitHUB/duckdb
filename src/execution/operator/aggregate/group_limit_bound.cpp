@@ -69,29 +69,33 @@ void GroupLimitBound::Reset() {
 }
 
 GroupLimitBoundSink::GroupLimitBoundSink(Allocator &allocator, const GroupLimitBound &bound)
-    : filter(allocator, bound.Types(), bound.Order()), keys_cache(allocator, LogicalType::BLOB), keys(keys_cache) {
+    : filter(allocator, bound.Types(), bound.Order()), candidate_sel(STANDARD_VECTOR_SIZE),
+      keys_cache(allocator, LogicalType::BLOB), keys(keys_cache) {
 	ordered.InitializeEmpty(bound.Types());
 	candidate_groups.InitializeEmpty(bound.Types());
 }
 
 idx_t GroupLimitBoundSink::Select(GroupLimitBound &bound, DataChunk &groups, SelectionVector &sel) {
+	filtered = filter.Refresh(bound.Boundary());
+	if (!filtered) {
+		return groups.size();
+	}
 	ordered.ReferenceColumns(groups, bound.Columns());
-	auto selected = groups.size();
-	if (filter.Refresh(bound.Boundary())) {
+	return filter.Admit(ordered, sel);
+}
+
+void GroupLimitBoundSink::AddCandidates(GroupLimitBound &bound, DataChunk &groups) {
+	ordered.ReferenceColumns(groups, bound.Columns());
+	if (filtered) {
 		idx_t before;
-		selected = filter.Select(ordered, true, sel, before);
+		filter.Select(ordered, false, candidate_sel, before);
 		if (before == 0) {
-			return selected;
+			return;
 		}
-		candidate_groups.Slice(ordered, sel, before);
+		candidate_groups.Slice(ordered, candidate_sel, before);
 	} else {
 		candidate_groups.Reference(ordered);
 	}
-	AddCandidates(bound);
-	return selected;
-}
-
-void GroupLimitBoundSink::AddCandidates(GroupLimitBound &bound) {
 	const auto limit = bound.Limit();
 	keys.ResetFromCache(keys_cache);
 	CreateSortKeyHelpers::CreateSortKey(candidate_groups, bound.Order(), keys);

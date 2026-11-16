@@ -631,17 +631,20 @@ unique_ptr<SQLStatement> PEGTransformerFactory::TransformAlterRoleStatement(PEGT
 unique_ptr<SQLStatement> PEGTransformerFactory::TransformAlterOwnerStatement(PEGTransformer &transformer,
                                                                              ParseResult &parse_result) {
 	auto &list_pr = parse_result.Cast<ListParseResult>();
-	// 0:'ALTER' 1:OwnerObjectType 2:QualifiedName 3:'OWNER' 4:'TO' 5:OwnerRoleSpec
+	// 0:'ALTER' 1:OwnerObjectType 2:IfExists? 3:QualifiedName 4:'OWNER' 5:'TO' 6:OwnerRoleSpec
 	// OwnerObjectType is a rule wrapping a CHOICE of keywords; child 0 of its
 	// LIST is the CHOICE (mirrors LoginOption handling above).
 	auto &obj_kw =
 	    list_pr.GetChild(1).Cast<ListParseResult>().Child<ChoiceParseResult>(0).GetResult().Cast<KeywordParseResult>();
 	auto info = make_uniq<AlterPermissionsInfo>(GrantObjectType(StringUtil::Upper(obj_kw.keyword)),
-	                                            transformer.Transform<QualifiedName>(list_pr.GetChild(2)));
+	                                            transformer.Transform<QualifiedName>(list_pr.GetChild(3)));
+	if (list_pr.Child<OptionalParseResult>(2).HasResult()) {
+		info->if_not_found = OnEntryNotFound::RETURN_NULL;
+	}
 
 	// OwnerRoleSpec: a rule wrapping CHOICE(CURRENT_USER / SESSION_USER /
 	// CURRENT_ROLE keyword / ColId).
-	auto &role_choice = list_pr.GetChild(5).Cast<ListParseResult>().Child<ChoiceParseResult>(0).GetResult();
+	auto &role_choice = list_pr.GetChild(6).Cast<ListParseResult>().Child<ChoiceParseResult>(0).GetResult();
 	if (role_choice.type == ParseResultType::KEYWORD) {
 		info->new_owner = StringUtil::Upper(role_choice.Cast<KeywordParseResult>().keyword);
 	} else {

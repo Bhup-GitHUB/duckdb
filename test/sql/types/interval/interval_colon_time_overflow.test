@@ -7,17 +7,17 @@
 statement error
 SELECT '9223372036854775807 microseconds 999999999:00:00'::INTERVAL;
 ----
-<REGEX>:.*interval value is out of range.*
+<REGEX>:.*interval field value out of range.*
 
 statement error
 SELECT INTERVAL '9223372036854775807 microseconds 999999999:00:00';
 ----
-<REGEX>:.*interval value is out of range.*
+<REGEX>:.*interval field value out of range.*
 
 statement error
 SELECT INTERVAL '-9223372036854775807 microseconds -999999999:00:00';
 ----
-<REGEX>:.*interval value is out of range.*
+<REGEX>:.*interval field value out of range.*
 
 # adding a negative time term to the minimum interval is fine
 query I

@@ -82,13 +82,13 @@ SELECT interval '-2147483648 months' AS without_ago,
        interval '-2147483648 months ago' AS with_ago,
        interval '-2147483648 months' = interval '-2147483648 months ago' AS are_equal;
 ----
-AGO interval value is out of range
+<REGEX>:Conversion Error.*interval field value out of range.*
 
 # Issue #25072: negating INT64_MIN with ago is out of range
 statement error
 SELECT '-9223372036854775800 microseconds -8 microseconds ago'::INTERVAL;
 ----
-AGO interval value is out of range
+<REGEX>:Conversion Error.*interval field value out of range.*
 
 query II
 SELECT INTERVAL '-9223372036854775807 microseconds ago' = INTERVAL '9223372036854775807 microseconds',
@@ -281,18 +281,18 @@ SELECT INTERVAL 'aergjaerghiuaehrgiuhaerg';
 statement error
 SELECT INTERVAL '100000000000000000year';
 ----
-<REGEX>:Invalid Input Error.*can't be cast.*
+<REGEX>:Conversion Error.*interval field value out of range.*
 
 # overflow in months
 statement error
 SELECT INTERVAL '100000000000000000months';
 ----
-<REGEX>:Invalid Input Error.*can't be cast.*
+<REGEX>:Conversion Error.*interval field value out of range.*
 
 statement error
 SELECT INTERVAL '4294967296months';
 ----
-<REGEX>:Invalid Input Error.*can't be cast.*
+<REGEX>:Conversion Error.*interval field value out of range.*
 
 query T
 SELECT INTERVAL '1294967296months';
@@ -302,7 +302,7 @@ SELECT INTERVAL '1294967296months';
 statement error
 SELECT INTERVAL '1294967296months 1294967296months';
 ----
-<REGEX>:Out of Range Error.*out of range.*
+<REGEX>:Conversion Error.*interval field value out of range.*
 
 query T
 SELECT INTERVAL '1294967296months -1294967296months';
@@ -312,29 +312,29 @@ SELECT INTERVAL '1294967296months -1294967296months';
 statement error
 SELECT INTERVAL '-1294967296months -1294967296months';
 ----
-<REGEX>:Out of Range Error.*out of range.*
+<REGEX>:Conversion Error.*interval field value out of range.*
 
 # overflow in days
 statement error
 SELECT INTERVAL '100000000000000000days';
 ----
-<REGEX>:Invalid Input Error.*can't be cast.*
+<REGEX>:Conversion Error.*interval field value out of range.*
 
 statement error
 SELECT INTERVAL '1294967296days 1294967296days';
 ----
-<REGEX>:Out of Range Error.*out of range.*
+<REGEX>:Conversion Error.*interval field value out of range.*
 
 # overflow in micro seconds
 statement error
 SELECT INTERVAL '100000000000000000000msecs';
 ----
-<REGEX>:Invalid Input Error.*Could not convert string.*
+<REGEX>:Conversion Error.*interval field value out of range.*
 
 statement error
 SELECT INTERVAL '100000000000000000hours';
 ----
-<REGEX>:Out of Range Error.*out of range.*
+<REGEX>:Conversion Error.*interval field value out of range.*
 
 query T
 SELECT INTERVAL '2562047788 hours';
@@ -344,7 +344,7 @@ SELECT INTERVAL '2562047788 hours';
 statement error
 SELECT INTERVAL '2562047788 hours 2562047788 hours';
 ----
-<REGEX>:Out of Range Error.*out of range.*
+<REGEX>:Conversion Error.*interval field value out of range.*
 
 query T
 SELECT INTERVAL '-9223372036854775msecs';
@@ -394,12 +394,12 @@ SELECT INTERVAL '2147483647 months 2147483647 days 9223372036854775msecs';
 statement error
 SELECT INTERVAL '9223372036854775810msecs';
 ----
-<REGEX>:Invalid Input Error.*Could not convert string.*
+<REGEX>:Conversion Error.*interval field value out of range.*
 
 statement error
 SELECT INTERVAL '-9223372036854775810msecs';
 ----
-<REGEX>:Invalid Input Error.*Could not convert string.*
+<REGEX>:Conversion Error.*interval field value out of range.*
 
 # need a number here
 statement error

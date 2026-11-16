@@ -22,6 +22,9 @@ struct ExpressionFilterExecutor {
 
 	virtual idx_t FilterSelection(SelectionVector &sel, Vector &vector, idx_t scan_count,
 	                              idx_t &approved_tuple_count) = 0;
+	virtual bool FiltersMasks() const {
+		return false;
+	}
 	virtual void FilterMask(Vector &vector, idx_t count, uint64_t *mask);
 
 	virtual bool FiltersValues() const {

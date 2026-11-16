@@ -37,32 +37,11 @@ bool ExpressionFilterExecutor::FilterValue(const_data_ptr_t value, bool valid) {
 	throw InternalException("FilterValue called on a filter executor that does not filter single values");
 }
 
-static constexpr idx_t MASK_WORDS = STANDARD_VECTOR_SIZE / 64;
-
-static void ClearMaskTail(uint64_t *mask, idx_t count) {
-	if (count % 64 != 0) {
-		mask[count / 64] &= (uint64_t(1) << (count % 64)) - 1;
-	}
-}
-
 void ExpressionFilterExecutor::FilterMask(Vector &vector, idx_t count, uint64_t *mask) {
-	D_ASSERT(count <= STANDARD_VECTOR_SIZE);
-	SelectionVector sel;
-	idx_t approved = count;
-	FilterSelection(sel, vector, count, approved);
-	if (approved == count) {
-		ClearMaskTail(mask, count);
-		return;
-	}
-	uint64_t kept[MASK_WORDS] = {};
-	for (idx_t i = 0; i < approved; i++) {
-		const auto row = sel.get_index(i);
-		kept[row / 64] |= uint64_t(1) << (row % 64);
-	}
-	for (idx_t w = 0; w < (count + 63) / 64; w++) {
-		mask[w] &= kept[w];
-	}
+	throw InternalException("FilterMask called on a filter executor that does not filter masks");
 }
+
+static constexpr idx_t MASK_WORDS = STANDARD_VECTOR_SIZE / 64;
 
 static idx_t MaskToSelection(const uint64_t *mask, idx_t count, sel_t *sel) {
 	idx_t result_count = 0;
@@ -79,8 +58,10 @@ public:
 	explicit ConjunctionAndFilterExecutor(vector<unique_ptr<ExpressionFilterExecutor>> children_p)
 	    : children(std::move(children_p)) {
 		filters_values = true;
+		filters_masks = true;
 		for (auto &child : children) {
 			filters_values = filters_values && child->FiltersValues();
+			filters_masks = filters_masks && child->FiltersMasks();
 		}
 	}
 
@@ -93,6 +74,10 @@ public:
 			}
 		}
 		return approved_tuple_count;
+	}
+
+	bool FiltersMasks() const override {
+		return filters_masks;
 	}
 
 	void FilterMask(Vector &vector, idx_t count, uint64_t *mask) override {
@@ -117,6 +102,7 @@ public:
 private:
 	vector<unique_ptr<ExpressionFilterExecutor>> children;
 	bool filters_values;
+	bool filters_masks;
 };
 
 class OptionalFilterExecutor final : public ExpressionFilterExecutor {
@@ -124,10 +110,6 @@ public:
 	idx_t FilterSelection(SelectionVector &sel, Vector &vector, idx_t scan_count,
 	                      idx_t &approved_tuple_count) override {
 		return approved_tuple_count;
-	}
-
-	void FilterMask(Vector &vector, idx_t count, uint64_t *mask) override {
-		ClearMaskTail(mask, count);
 	}
 
 	bool FiltersValues() const override {
@@ -255,15 +237,12 @@ public:
 		return approved_tuple_count;
 	}
 
+	bool FiltersMasks() const override {
+		return !constant.IsNull();
+	}
+
 	void FilterMask(Vector &vector, idx_t count, uint64_t *mask) override {
-		if (constant.IsNull()) {
-			std::fill_n(mask, (count + 63) / 64, uint64_t(0));
-			return;
-		}
-		if (vector.GetVectorType() != VectorType::FLAT_VECTOR) {
-			ExpressionFilterExecutor::FilterMask(vector, count, mask);
-			return;
-		}
+		D_ASSERT(vector.GetVectorType() == VectorType::FLAT_VECTOR && !constant.IsNull());
 		DispatchComparison(constant.type().InternalType(), comparison_type,
 		                   [&]<class T, class OP>() { MaskFlat<T, OP>(vector, count, mask); });
 	}
@@ -339,15 +318,6 @@ public:
 		return comparison->FilterSelection(sel, vector, scan_count, approved_tuple_count);
 	}
 
-	void FilterMask(Vector &vector, idx_t count, uint64_t *mask) override {
-		Refresh();
-		if (comparison) {
-			comparison->FilterMask(vector, count, mask);
-		} else {
-			ClearMaskTail(mask, count);
-		}
-	}
-
 	bool FiltersValues() const override {
 		return true;
 	}
@@ -416,26 +386,6 @@ public:
 			approved_tuple_count = result_count;
 		}
 		return approved_tuple_count;
-	}
-
-	void FilterMask(Vector &vector, idx_t count, uint64_t *mask) override {
-		if (vector.GetVectorType() != VectorType::FLAT_VECTOR) {
-			ExpressionFilterExecutor::FilterMask(vector, count, mask);
-			return;
-		}
-		const auto words = (count + 63) / 64;
-		const auto validity = FlatVector::Validity(vector).GetData();
-		if (!validity) {
-			if (IS_NULL) {
-				std::fill_n(mask, words, uint64_t(0));
-			}
-			ClearMaskTail(mask, count);
-			return;
-		}
-		for (idx_t w = 0; w < words; w++) {
-			mask[w] &= IS_NULL ? ~validity[w] : validity[w];
-		}
-		ClearMaskTail(mask, count);
 	}
 
 	bool FiltersValues() const override {

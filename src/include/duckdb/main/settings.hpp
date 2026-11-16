@@ -1684,14 +1684,14 @@ struct ExplainOutputFormatSetting {
 	using RETURN_TYPE = ExplainFormatShape;
 	static constexpr const char *Name = "explain_output_format";
 	static constexpr const char *Description =
-	    "Column shape of EXPLAIN output (DUCKDB_NATIVE = native two-column key/value, PG = single QUERY PLAN column "
-	    "with one row per line of a text or compact plan and one row per plan in other formats)";
+	    "Column shape of EXPLAIN output (CLI = two columns, key and value, SERVER = single QUERY PLAN column with one "
+	    "row per line of a text or compact plan and one row per plan in other formats)";
 	static constexpr const char *InputType = "VARCHAR";
 	static constexpr bool IsDebug = false;
 	static constexpr bool IsDeprecated = false;
 	static constexpr bool NoResetAll = false;
 	static constexpr bool Rebind = false;
-	static constexpr const char *DefaultValue = "DUCKDB_NATIVE";
+	static constexpr const char *DefaultValue = "CLI";
 	static constexpr SettingScopeTarget Scope = SettingScopeTarget::LOCAL_DEFAULT;
 	static constexpr idx_t SettingIndex = NEXT_SETTING_INDEX();
 	static void OnSet(SettingCallbackInfo &info, Value &input);

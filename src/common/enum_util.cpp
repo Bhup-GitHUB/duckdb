@@ -2304,8 +2304,8 @@ ExceptionType EnumUtil::FromString<ExceptionType>(std::string_view value) {
 
 const StringUtil::EnumStringLiteral *GetExplainFormatShapeValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
-		{ static_cast<uint32_t>(ExplainFormatShape::DUCKDB_NATIVE), "DUCKDB_NATIVE" },
-		{ static_cast<uint32_t>(ExplainFormatShape::PG), "PG" }
+		{ static_cast<uint32_t>(ExplainFormatShape::CLI), "CLI" },
+		{ static_cast<uint32_t>(ExplainFormatShape::SERVER), "SERVER" }
 	};
 	return values;
 }

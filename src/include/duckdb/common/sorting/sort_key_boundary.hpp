@@ -38,10 +38,16 @@ public:
 	void Reset();
 
 private:
+	struct Point {
+		const string *key;
+		idx_t rows;
+	};
+
 	mutable annotated_mutex lock;
 	string key DUCKDB_GUARDED_BY(lock);
 	bool is_set DUCKDB_GUARDED_BY(lock) = false;
 	vector<vector<Quantile>> reports DUCKDB_GUARDED_BY(lock);
+	vector<Point> points DUCKDB_GUARDED_BY(lock);
 	atomic<idx_t> producers {0};
 	atomic<idx_t> version {0};
 	const shared_ptr<DynamicFilterData> dynamic_filter;

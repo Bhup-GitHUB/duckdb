@@ -54,38 +54,45 @@ void SortKeyBoundary::Contribute(idx_t producer, vector<Quantile> quantiles, idx
 			reports.resize(producer + 1);
 		}
 		reports[producer] = std::move(quantiles);
-		struct Point {
-			const Quantile *quantile;
-			idx_t producer;
-		};
-		vector<Point> points;
+		points.clear();
 		idx_t total = 0;
-		for (idx_t p = 0; p < reports.size(); p++) {
-			for (auto &quantile : reports[p]) {
-				points.push_back({&quantile, p});
-			}
-			if (!reports[p].empty()) {
-				total += reports[p].back().rows;
+		for (auto &report : reports) {
+			idx_t counted = 0;
+			for (auto &quantile : report) {
+				if (!is_set || quantile.key < key) {
+					points.push_back({&quantile.key, quantile.rows - counted});
+					total += quantile.rows - counted;
+				}
+				counted = quantile.rows;
 			}
 		}
 		if (total < limit) {
 			return;
 		}
-		std::sort(points.begin(), points.end(),
-		          [](const Point &l, const Point &r) { return l.quantile->key < r.quantile->key; });
-		vector<idx_t> counted(reports.size(), 0);
-		total = 0;
-		for (auto &point : points) {
-			total += point.quantile->rows - counted[point.producer];
-			counted[point.producer] = point.quantile->rows;
-			if (total >= limit) {
-				if (is_set && !(point.quantile->key < key)) {
-					return;
-				}
-				bound = point.quantile->key;
+		const auto by_key = [](const Point &l, const Point &r) {
+			return *l.key < *r.key;
+		};
+		auto first = points.begin();
+		auto last = points.end();
+		auto need = limit;
+		while (last - first > 1) {
+			const auto mid = first + (last - first) / 2;
+			std::nth_element(first, mid, last, by_key);
+			idx_t left = 0;
+			for (auto it = first; it != mid; ++it) {
+				left += it->rows;
+			}
+			if (left >= need) {
+				last = mid;
+			} else if (left + mid->rows >= need) {
+				first = mid;
 				break;
+			} else {
+				need -= left + mid->rows;
+				first = mid + 1;
 			}
 		}
+		bound = *first->key;
 	}
 	Update(string_t(bound));
 }

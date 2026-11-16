@@ -279,16 +279,19 @@ void TopNKeyHeap<SORT_KEY_TYPE>::PublishBoundary(SortKeyBoundary &boundary) {
 			producer = boundary.NewProducer();
 		}
 		static constexpr idx_t QUANTILES = 8;
-		vector<SORT_KEY> keys(heap.begin(), heap.end());
-		std::sort(keys.begin(), keys.end());
 		vector<SortKeyBoundary::Quantile> quantiles;
 		quantiles.reserve(QUANTILES);
-		D_ASSERT(keys.size() >= QUANTILES);
+		D_ASSERT(heap.size() >= QUANTILES);
+		auto rest = heap.begin();
 		for (idx_t q = 1; q <= QUANTILES; q++) {
-			const auto rows = (keys.size() * q + QUANTILES - 1) / QUANTILES;
-			const auto bytes = KeyBytes(keys[rows - 1]);
+			const auto rows = (heap.size() * q + QUANTILES - 1) / QUANTILES;
+			const auto nth = heap.begin() + NumericCast<int64_t>(rows - 1);
+			std::nth_element(rest, nth, heap.end());
+			const auto bytes = KeyBytes(*nth);
 			quantiles.push_back({string(bytes.GetData(), bytes.GetSize()), rows});
+			rest = nth + 1;
 		}
+		std::make_heap(heap.begin(), heap.end());
 		boundary.Contribute(producer, std::move(quantiles), heap_size);
 		next_contribution = heap.size() * 2;
 	}

@@ -202,9 +202,6 @@ public:
 
 	void SetValue(Value val);
 	void Reset();
-	static bool CompareValue(ExpressionType comparison_type, const Value &constant, const Value &value);
-	static FilterPropagateResult CheckStatistics(const BaseStatistics &stats, ExpressionType comparison_type,
-	                                             const Value &constant);
 };
 
 //! FunctionData for dynamic filter internal function

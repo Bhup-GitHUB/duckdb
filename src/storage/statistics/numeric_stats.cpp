@@ -157,87 +157,6 @@ void NumericStats::ClampMax(BaseStatistics &stats, const BaseStatistics &other) 
 }
 
 template <class T>
-bool ConstantExactRange(T min, T max, T constant) {
-	return Equals::Operation(constant, min) && Equals::Operation(constant, max);
-}
-
-template <class T>
-bool ConstantValueInRange(T min, T max, T constant) {
-	return !(LessThan::Operation(constant, min) || GreaterThan::Operation(constant, max));
-}
-
-template <class T>
-FilterPropagateResult CheckZonemapTemplated(const BaseStatistics &stats, ExpressionType comparison_type, T min_value,
-                                            T max_value, T constant) {
-	switch (comparison_type) {
-	case ExpressionType::COMPARE_EQUAL:
-	case ExpressionType::COMPARE_NOT_DISTINCT_FROM:
-		if (ConstantExactRange(min_value, max_value, constant)) {
-			return FilterPropagateResult::FILTER_ALWAYS_TRUE;
-		}
-		if (ConstantValueInRange(min_value, max_value, constant)) {
-			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-		}
-		return FilterPropagateResult::FILTER_ALWAYS_FALSE;
-	case ExpressionType::COMPARE_NOTEQUAL:
-	case ExpressionType::COMPARE_DISTINCT_FROM:
-		if (!ConstantValueInRange(min_value, max_value, constant)) {
-			return FilterPropagateResult::FILTER_ALWAYS_TRUE;
-		} else if (ConstantExactRange(min_value, max_value, constant)) {
-			// corner case of a cluster with one numeric equal to the target constant
-			return FilterPropagateResult::FILTER_ALWAYS_FALSE;
-		}
-		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-		// GreaterThanEquals::Operation(X, C)
-		// this can be true only if max(X) >= C
-		// if min(X) >= C, then this is always true
-		if (GreaterThanEquals::Operation(min_value, constant)) {
-			return FilterPropagateResult::FILTER_ALWAYS_TRUE;
-		} else if (GreaterThanEquals::Operation(max_value, constant)) {
-			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-		} else {
-			return FilterPropagateResult::FILTER_ALWAYS_FALSE;
-		}
-	case ExpressionType::COMPARE_GREATERTHAN:
-		// GreaterThan::Operation(X, C)
-		// this can be true only if max(X) > C
-		// if min(X) > C, then this is always true
-		if (GreaterThan::Operation(min_value, constant)) {
-			return FilterPropagateResult::FILTER_ALWAYS_TRUE;
-		} else if (GreaterThan::Operation(max_value, constant)) {
-			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-		} else {
-			return FilterPropagateResult::FILTER_ALWAYS_FALSE;
-		}
-	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-		// LessThanEquals::Operation(X, C)
-		// this can be true only if min(X) <= C
-		// if max(X) <= C, then this is always true
-		if (LessThanEquals::Operation(max_value, constant)) {
-			return FilterPropagateResult::FILTER_ALWAYS_TRUE;
-		} else if (LessThanEquals::Operation(min_value, constant)) {
-			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-		} else {
-			return FilterPropagateResult::FILTER_ALWAYS_FALSE;
-		}
-	case ExpressionType::COMPARE_LESSTHAN:
-		// LessThan::Operation(X, C)
-		// this can be true only if min(X) < C
-		// if max(X) < C, then this is always true
-		if (LessThan::Operation(max_value, constant)) {
-			return FilterPropagateResult::FILTER_ALWAYS_TRUE;
-		} else if (LessThan::Operation(min_value, constant)) {
-			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-		} else {
-			return FilterPropagateResult::FILTER_ALWAYS_FALSE;
-		}
-	default:
-		throw InternalException("Expression type in zonemap check not implemented");
-	}
-}
-
-template <class T>
 FilterPropagateResult CheckZonemapTemplated(const BaseStatistics &stats, ExpressionType comparison_type,
                                             array_ptr<const Value> constants) {
 	T min_value = NumericStats::GetMinUnsafe<T>(stats);
@@ -246,7 +165,7 @@ FilterPropagateResult CheckZonemapTemplated(const BaseStatistics &stats, Express
 		D_ASSERT(constant_value.type() == stats.GetType());
 		D_ASSERT(!constant_value.IsNull());
 		T constant = constant_value.GetValueUnsafe<T>();
-		auto prune_result = CheckZonemapTemplated(stats, comparison_type, min_value, max_value, constant);
+		auto prune_result = NumericStats::CheckRange<T>(comparison_type, min_value, max_value, constant);
 		if (prune_result == FilterPropagateResult::NO_PRUNING_POSSIBLE) {
 			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 		} else if (prune_result == FilterPropagateResult::FILTER_ALWAYS_TRUE) {

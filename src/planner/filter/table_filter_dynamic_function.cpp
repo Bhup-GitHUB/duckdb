@@ -13,6 +13,7 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/filter/zonemap_checker.hpp"
 
 namespace duckdb {
 
@@ -39,56 +40,6 @@ void DynamicFilterData::Reset() {
 	version.store(0, std::memory_order_release);
 }
 
-bool DynamicFilterData::CompareValue(ExpressionType comparison_type, const Value &constant, const Value &value) {
-	switch (comparison_type) {
-	case ExpressionType::COMPARE_EQUAL:
-		return ValueOperations::Equals(value, constant);
-	case ExpressionType::COMPARE_NOTEQUAL:
-		return ValueOperations::NotEquals(value, constant);
-	case ExpressionType::COMPARE_GREATERTHAN:
-		return ValueOperations::GreaterThan(value, constant);
-	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-		return ValueOperations::GreaterThanEquals(value, constant);
-	case ExpressionType::COMPARE_LESSTHAN:
-		return ValueOperations::LessThan(value, constant);
-	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-		return ValueOperations::LessThanEquals(value, constant);
-	default:
-		throw InternalException("Unknown comparison type for DynamicFilter: " + EnumUtil::ToString(comparison_type));
-	}
-}
-
-FilterPropagateResult DynamicFilterData::CheckStatistics(const BaseStatistics &stats, ExpressionType comparison_type,
-                                                         const Value &constant) {
-	if (!stats.CanHaveNoNull()) {
-		// the bound is never NULL, so comparing an all-NULL segment against it cannot yield a match
-		// (StringStats::CheckZonemap asserts on such statistics rather than answering)
-		return FilterPropagateResult::FILTER_ALWAYS_FALSE;
-	}
-	switch (constant.type().InternalType()) {
-	case PhysicalType::UINT8:
-	case PhysicalType::UINT16:
-	case PhysicalType::UINT32:
-	case PhysicalType::UINT64:
-	case PhysicalType::UINT128:
-	case PhysicalType::INT8:
-	case PhysicalType::INT16:
-	case PhysicalType::INT32:
-	case PhysicalType::INT64:
-	case PhysicalType::INT128:
-	case PhysicalType::FLOAT:
-	case PhysicalType::DOUBLE:
-		return NumericStats::CheckZonemap(stats, comparison_type, array_ptr<const Value>(constant));
-	case PhysicalType::VARCHAR:
-		if (stats.GetStatsType() == StatisticsType::STRING_STATS) {
-			return StringStats::CheckZonemap(stats, comparison_type, array_ptr<const Value>(constant));
-		}
-		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-	default:
-		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-	}
-}
-
 DynamicFilterFunctionData::DynamicFilterFunctionData(shared_ptr<DynamicFilterData> filter_data_p)
     : filter_data(std::move(filter_data_p)) {
 }
@@ -104,8 +55,9 @@ bool DynamicFilterFunctionData::Equals(const FunctionData &other_p) const {
 
 struct DynamicFilterLocalState : public FunctionLocalState {
 	idx_t version = 0;
-	Value constant;
-	bool vectorized = false;
+	//! The bound as a constant vector of the input's type; none while there is no bound or its type differs, and then
+	//! every row passes: the filter only prunes
+	unique_ptr<Vector> constant;
 };
 
 static unique_ptr<FunctionLocalState>
@@ -133,26 +85,6 @@ static idx_t SelectDynamicFilter(const Vector &input, ExpressionType comparison_
 	}
 }
 
-static idx_t SelectDynamicFilter(Vector &input, ExpressionType comparison_type, const Value &constant,
-                                 SelectionVector &result_sel, idx_t count) {
-	UnifiedVectorFormat input_data;
-	input.ToUnifiedFormat(input_data);
-
-	idx_t approved_count = 0;
-	for (idx_t i = 0; i < count; i++) {
-		auto idx = input_data.sel->get_index(i);
-		if (!input_data.validity.RowIsValid(idx)) {
-			continue;
-		}
-		auto value = input.GetValue(idx);
-		if (!DynamicFilterData::CompareValue(comparison_type, constant, value)) {
-			continue;
-		}
-		result_sel.set_index(approved_count++, i);
-	}
-	return approved_count;
-}
-
 static idx_t DynamicFilterSelect(DataChunk &args, ExpressionState &state, optional_ptr<const SelectionVector> sel,
                                  optional_ptr<SelectionVector> true_sel, optional_ptr<SelectionVector> false_sel) {
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
@@ -168,27 +100,26 @@ static idx_t DynamicFilterSelect(DataChunk &args, ExpressionState &state, option
 	auto local_state_ptr = ExecuteFunctionState::GetFunctionState(state);
 	auto &local = local_state_ptr ? local_state_ptr->Cast<DynamicFilterLocalState>() : call_state;
 	if (filter_data.version.load(std::memory_order_acquire) != local.version) {
+		Value constant;
 		{
 			lock_guard<mutex> lock(filter_data.lock);
-			local.constant = filter_data.constant;
+			constant = filter_data.constant;
 			local.version = filter_data.version.load(std::memory_order_relaxed);
 		}
-		local.vectorized = local.constant.type() == input.GetType();
+		local.constant.reset();
+		if (local.version != 0 && constant.type() == input.GetType()) {
+			local.constant = make_uniq<Vector>(constant, count_t(count));
+		}
 	}
-	if (local.version == 0) {
+	if (!local.constant) {
 		return SetAllTrueSelection(count, sel, true_sel, false_sel);
 	}
+	FlatVector::SetSize(*local.constant, count);
 
 	SelectionVector temp_true(count);
 	auto result_true_sel = (!true_sel || (sel && true_sel.get() == sel.get())) ? &temp_true : true_sel.get();
-	idx_t approved_count;
-	if (local.vectorized) {
-		const Vector constant(local.constant, count_t(count));
-		approved_count = SelectDynamicFilter(input, filter_data.comparison_type, constant, *result_true_sel, count);
-	} else {
-		approved_count =
-		    SelectDynamicFilter(input, filter_data.comparison_type, local.constant, *result_true_sel, count);
-	}
+	const auto approved_count =
+	    SelectDynamicFilter(input, filter_data.comparison_type, *local.constant, *result_true_sel, count);
 	return TranslateSelection(count, sel, *result_true_sel, approved_count, true_sel, false_sel);
 }
 
@@ -218,11 +149,11 @@ FilterPropagateResult DynamicFilterScalarFun::FilterPrune(const FunctionStatisti
 		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	}
 	auto column_stats = input.ChildStats(0);
-	if (!column_stats) {
+	if (!column_stats || column_stats->GetType() != data.filter_data->constant.type()) {
 		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	}
-	return DynamicFilterData::CheckStatistics(*column_stats, data.filter_data->comparison_type,
-	                                          data.filter_data->constant);
+	return ZonemapChecker::CompileComparison(data.filter_data->comparison_type, data.filter_data->constant)
+	    ->Check(*column_stats, nullptr);
 }
 
 string DynamicFilterScalarFun::ToString(const string &column_name, optional_ptr<const DynamicFilterData> filter_data) {

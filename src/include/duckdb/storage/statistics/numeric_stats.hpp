@@ -77,6 +77,57 @@ struct NumericStats {
 	DUCKDB_API static FilterPropagateResult CheckZonemap(const BaseStatistics &stats, ExpressionType comparison_type,
 	                                                     array_ptr<const Value> constants);
 
+	//! The verdict of `x <comparison> constant` over the non-NULL values of [min, max]
+	template <class T>
+	static FilterPropagateResult CheckRange(ExpressionType comparison, T min, T max, T constant) {
+		switch (comparison) {
+		case ExpressionType::COMPARE_EQUAL:
+		case ExpressionType::COMPARE_NOT_DISTINCT_FROM:
+			if (Equals::Operation(constant, min) && Equals::Operation(constant, max)) {
+				return FilterPropagateResult::FILTER_ALWAYS_TRUE;
+			}
+			if (LessThan::Operation(constant, min) || GreaterThan::Operation(constant, max)) {
+				return FilterPropagateResult::FILTER_ALWAYS_FALSE;
+			}
+			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+		case ExpressionType::COMPARE_NOTEQUAL:
+		case ExpressionType::COMPARE_DISTINCT_FROM:
+			if (LessThan::Operation(constant, min) || GreaterThan::Operation(constant, max)) {
+				return FilterPropagateResult::FILTER_ALWAYS_TRUE;
+			}
+			if (Equals::Operation(constant, min) && Equals::Operation(constant, max)) {
+				return FilterPropagateResult::FILTER_ALWAYS_FALSE;
+			}
+			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+			if (GreaterThanEquals::Operation(min, constant)) {
+				return FilterPropagateResult::FILTER_ALWAYS_TRUE;
+			}
+			return GreaterThanEquals::Operation(max, constant) ? FilterPropagateResult::NO_PRUNING_POSSIBLE
+			                                                   : FilterPropagateResult::FILTER_ALWAYS_FALSE;
+		case ExpressionType::COMPARE_GREATERTHAN:
+			if (GreaterThan::Operation(min, constant)) {
+				return FilterPropagateResult::FILTER_ALWAYS_TRUE;
+			}
+			return GreaterThan::Operation(max, constant) ? FilterPropagateResult::NO_PRUNING_POSSIBLE
+			                                             : FilterPropagateResult::FILTER_ALWAYS_FALSE;
+		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+			if (LessThanEquals::Operation(max, constant)) {
+				return FilterPropagateResult::FILTER_ALWAYS_TRUE;
+			}
+			return LessThanEquals::Operation(min, constant) ? FilterPropagateResult::NO_PRUNING_POSSIBLE
+			                                                : FilterPropagateResult::FILTER_ALWAYS_FALSE;
+		case ExpressionType::COMPARE_LESSTHAN:
+			if (LessThan::Operation(max, constant)) {
+				return FilterPropagateResult::FILTER_ALWAYS_TRUE;
+			}
+			return LessThan::Operation(min, constant) ? FilterPropagateResult::NO_PRUNING_POSSIBLE
+			                                          : FilterPropagateResult::FILTER_ALWAYS_FALSE;
+		default:
+			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+		}
+	}
+
 	//! Whether the constants cover every value in [min, max] - only meaningful for integral types
 	static bool ConstantsCoverRange(const BaseStatistics &stats, array_ptr<const Value> constants);
 

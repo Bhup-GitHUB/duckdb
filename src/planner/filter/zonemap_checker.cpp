@@ -25,64 +25,6 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 // Checker instances
 //===--------------------------------------------------------------------===//
-template <class T>
-static FilterPropagateResult CheckRange(ExpressionType comparison, T min_value, T max_value, T constant) {
-	switch (comparison) {
-	case ExpressionType::COMPARE_EQUAL:
-	case ExpressionType::COMPARE_NOT_DISTINCT_FROM:
-		if (Equals::Operation(constant, min_value) && Equals::Operation(constant, max_value)) {
-			return FilterPropagateResult::FILTER_ALWAYS_TRUE;
-		}
-		if (!(LessThan::Operation(constant, min_value) || GreaterThan::Operation(constant, max_value))) {
-			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-		}
-		return FilterPropagateResult::FILTER_ALWAYS_FALSE;
-	case ExpressionType::COMPARE_NOTEQUAL:
-	case ExpressionType::COMPARE_DISTINCT_FROM:
-		if (LessThan::Operation(constant, min_value) || GreaterThan::Operation(constant, max_value)) {
-			return FilterPropagateResult::FILTER_ALWAYS_TRUE;
-		}
-		if (Equals::Operation(constant, min_value) && Equals::Operation(constant, max_value)) {
-			return FilterPropagateResult::FILTER_ALWAYS_FALSE;
-		}
-		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-		if (GreaterThanEquals::Operation(min_value, constant)) {
-			return FilterPropagateResult::FILTER_ALWAYS_TRUE;
-		}
-		if (GreaterThanEquals::Operation(max_value, constant)) {
-			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-		}
-		return FilterPropagateResult::FILTER_ALWAYS_FALSE;
-	case ExpressionType::COMPARE_GREATERTHAN:
-		if (GreaterThan::Operation(min_value, constant)) {
-			return FilterPropagateResult::FILTER_ALWAYS_TRUE;
-		}
-		if (GreaterThan::Operation(max_value, constant)) {
-			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-		}
-		return FilterPropagateResult::FILTER_ALWAYS_FALSE;
-	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-		if (LessThanEquals::Operation(max_value, constant)) {
-			return FilterPropagateResult::FILTER_ALWAYS_TRUE;
-		}
-		if (LessThanEquals::Operation(min_value, constant)) {
-			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-		}
-		return FilterPropagateResult::FILTER_ALWAYS_FALSE;
-	case ExpressionType::COMPARE_LESSTHAN:
-		if (LessThan::Operation(max_value, constant)) {
-			return FilterPropagateResult::FILTER_ALWAYS_TRUE;
-		}
-		if (LessThan::Operation(min_value, constant)) {
-			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-		}
-		return FilterPropagateResult::FILTER_ALWAYS_FALSE;
-	default:
-		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-	}
-}
-
 static FilterPropagateResult AllNullComparisonVerdict(ExpressionType comparison) {
 	return comparison == ExpressionType::COMPARE_DISTINCT_FROM ? FilterPropagateResult::FILTER_ALWAYS_TRUE
 	                                                           : FilterPropagateResult::FILTER_ALWAYS_FALSE;
@@ -139,8 +81,8 @@ public:
 		}
 		auto result = FilterPropagateResult::NO_PRUNING_POSSIBLE;
 		if (NumericStats::HasMinMax(stats)) {
-			result = CheckRange<T>(COMPARISON, NumericStats::GetMinUnsafe<T>(stats),
-			                       NumericStats::GetMaxUnsafe<T>(stats), constant);
+			result = NumericStats::CheckRange<T>(COMPARISON, NumericStats::GetMinUnsafe<T>(stats),
+			                                     NumericStats::GetMaxUnsafe<T>(stats), constant);
 		}
 		return ComparisonVerdict(stats, COMPARISON, result);
 	}
@@ -167,8 +109,8 @@ public:
 		}
 		const auto min_value = NumericStats::GetMinUnsafe<T>(stats);
 		const auto max_value = NumericStats::GetMaxUnsafe<T>(stats);
-		return BetweenVerdict(stats, CheckRange<T>(lower_comparison, min_value, max_value, lower),
-		                      CheckRange<T>(upper_comparison, min_value, max_value, upper));
+		return BetweenVerdict(stats, NumericStats::CheckRange<T>(lower_comparison, min_value, max_value, lower),
+		                      NumericStats::CheckRange<T>(upper_comparison, min_value, max_value, upper));
 	}
 
 private:
@@ -299,6 +241,8 @@ private:
 	string_t upper;
 };
 
+//! Truncating a string to the length of a statistics bound keeps its order, so the constants a bound could equal
+//! form one run of the sorted list: only that run is checked.
 class StringInZonemapChecker final : public ZonemapChecker {
 public:
 	explicit StringInZonemapChecker(const vector<const Value *> &values) {
@@ -306,17 +250,31 @@ public:
 		for (auto *value : values) {
 			constants.emplace_back(StringValue::Get(*value));
 		}
+		std::sort(constants.begin(), constants.end(), LessThan::Operation<string_t>);
+		constants.erase(std::unique(constants.begin(), constants.end(), Equals::Operation<string_t>), constants.end());
 	}
 
 	FilterPropagateResult Check(const BaseStatistics &stats, optional_ptr<ClientContext> context) const final {
 		if (!stats.CanHaveNoNull()) {
 			return FilterPropagateResult::FILTER_ALWAYS_FALSE;
 		}
-		if (stats.GetStatsType() != StatisticsType::STRING_STATS) {
+		if (stats.GetStatsType() != StatisticsType::STRING_STATS || !StringStats::HasMinMax(stats)) {
 			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 		}
-		for (const auto &constant : constants) {
-			auto prune_result = StringStats::CheckZonemap(stats, ExpressionType::COMPARE_EQUAL, constant);
+		const auto min = StringStats::GetMinUnsafe(stats);
+		const auto max = StringStats::GetMaxUnsafe(stats);
+		const string_t min_bound(min.data(), UnsafeNumericCast<uint32_t>(min.size()));
+		const string_t max_bound(max.data(), UnsafeNumericCast<uint32_t>(max.size()));
+		const auto min_type = StringStats::GetMinType(stats);
+		const auto max_type = StringStats::GetMaxType(stats);
+		auto constant = std::partition_point(constants.begin(), constants.end(), [&](string_t c) {
+			return StringStats::CompareStringStats(c, min_bound, min_type) < 0;
+		});
+		for (; constant != constants.end(); ++constant) {
+			if (StringStats::CompareStringStats(*constant, max_bound, max_type) > 0) {
+				break;
+			}
+			auto prune_result = StringStats::CheckZonemap(stats, ExpressionType::COMPARE_EQUAL, *constant);
 			if (prune_result != FilterPropagateResult::FILTER_ALWAYS_FALSE) {
 				return InVerdict(stats, prune_result);
 			}
@@ -502,12 +460,12 @@ private:
 	mutable vector<optional_ptr<const BaseStatistics>> child_stats;
 };
 
-//! Root dynamic filter: reads the shared bound the TOP_N operator tightens while the scan runs
-//! (mirrors DynamicFilterScalarFun::FilterPrune).
+//! Root dynamic filter: reads the shared bound the TOP_N operator tightens while the scan runs, compiled into the
+//! static comparison checker of each new bound.
 class DynamicZonemapChecker final : public ZonemapChecker {
 public:
-	explicit DynamicZonemapChecker(shared_ptr<DynamicFilterData> filter_data_p)
-	    : filter_data(std::move(filter_data_p)) {
+	DynamicZonemapChecker(shared_ptr<DynamicFilterData> filter_data_p, LogicalType column_type_p)
+	    : filter_data(std::move(filter_data_p)), column_type(std::move(column_type_p)) {
 	}
 
 	FilterPropagateResult Check(const BaseStatistics &stats, optional_ptr<ClientContext> context) const final {
@@ -517,19 +475,22 @@ public:
 		}
 		if (version != cached_version) {
 			lock_guard<mutex> lock(filter_data->lock);
-			cached_constant = filter_data->constant;
 			cached_version = filter_data->version.load(std::memory_order_relaxed);
-			if (cached_version == 0) {
-				return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+			cached_constant = filter_data->constant;
+			compiled.reset();
+			if (cached_version != 0 && cached_constant.type() == column_type) {
+				compiled = CompileComparison(filter_data->comparison_type, cached_constant);
 			}
 		}
-		return DynamicFilterData::CheckStatistics(stats, filter_data->comparison_type, cached_constant);
+		return compiled ? compiled->Check(stats, context) : FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	}
 
 private:
 	shared_ptr<DynamicFilterData> filter_data;
+	LogicalType column_type;
 	mutable idx_t cached_version = 0;
 	mutable Value cached_constant;
+	mutable unique_ptr<ZonemapChecker> compiled;
 };
 
 class ConstantZonemapChecker final : public ZonemapChecker {
@@ -730,13 +691,18 @@ static CompileResult CompileComparison(const BoundFunctionExpression &func) {
 	if (value.type() != input_type) {
 		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	}
-	const auto physical = input_type.InternalType();
-	auto checker = MakeNumericChecker<MakeComparisonChecker>(physical, comparison, value);
+	return ZonemapChecker::CompileComparison(comparison, value);
+}
+
+unique_ptr<ZonemapChecker> ZonemapChecker::CompileComparison(ExpressionType comparison, const Value &constant) {
+	D_ASSERT(!constant.IsNull());
+	const auto physical = constant.type().InternalType();
+	auto checker = MakeNumericChecker<MakeComparisonChecker>(physical, comparison, constant);
 	if (checker) {
-		return std::move(checker);
+		return checker;
 	}
 	if (physical == PhysicalType::VARCHAR) {
-		return make_uniq<StringComparisonZonemapChecker>(comparison, StringValue::Get(value));
+		return make_uniq<StringComparisonZonemapChecker>(comparison, StringValue::Get(constant));
 	}
 	return make_uniq<NullFlagsZonemapChecker>(AllNullComparisonVerdict(comparison));
 }
@@ -913,7 +879,7 @@ static CompileResult CompilePruneCallback(const BoundFunctionExpression &func) {
 		if (!IsColumnRef(column)) {
 			return CompileRemappedInput(column);
 		}
-		return make_uniq<DynamicZonemapChecker>(data.filter_data);
+		return make_uniq<DynamicZonemapChecker>(data.filter_data, column.GetReturnType());
 	}
 	auto &children = func.GetChildren();
 	vector<unique_ptr<BaseStatistics>> constant_stats;

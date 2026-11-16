@@ -1,6 +1,7 @@
 #include "duckdb/planner/statement_preprocessor.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/peg/compiled_grammar.hpp"
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/pragma_function_catalog_entry.hpp"
@@ -33,6 +34,12 @@
 #include "duckdb/common/enums/current_transaction_state.hpp"
 
 namespace duckdb {
+
+static Parser RenderedSQLParser(ClientContext &context) {
+	auto options = ParserOptions::Builtin();
+	options.grammar = CompiledGrammar::Get(context);
+	return Parser(options);
+}
 
 enum class PreprocessingTransactionHandling : uint8_t {
 	// Not in a transaction and should wrap in an implicit BEGIN/COMMIT
@@ -309,7 +316,7 @@ void StatementPreprocessor::ExpandCopyDatabase(vector<unique_ptr<SQLStatement>> 
 			}
 			auto info = entry.get().GetInfo(transaction);
 			info->SetQualifiedName(info->GetQualifiedName().WithCatalog(target));
-			Parser parser(context);
+			auto parser = RenderedSQLParser(context);
 			parser.ParseQuery(info->ToString());
 			for (auto &index : parser.statements) {
 				expanded.push_back(std::move(index));
@@ -329,7 +336,7 @@ vector<unique_ptr<SQLStatement>> StatementPreprocessor::TryReparsePragma(unique_
 		// Needs reparsing
 		FunctionParameters parameters {bound_info->parameters, bound_info->named_parameters};
 		const auto query_to_reparse = bound_info->function.query(context, parameters);
-		Parser parser(context);
+		auto parser = RenderedSQLParser(context);
 		parser.ParseQuery(query_to_reparse);
 		return std::move(parser.statements);
 	}

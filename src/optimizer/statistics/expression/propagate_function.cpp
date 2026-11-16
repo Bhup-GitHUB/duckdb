@@ -29,7 +29,7 @@ bool TryEvaluateAtConstants(ClientContext &context, const BoundFunctionExpressio
 // Equal bounds need not imply identical inputs for certain types, so we skip this optimization for those values.
 // Floating-point bounds only lose information for the sign of zero.
 bool CanInferConstantFromNumericBounds(const BaseStatistics &stats) {
-	return NumericStats::Visit(stats.GetType().InternalType(), [&]<class T>() {
+	return VisitPhysicalType(stats.GetType().InternalType(), [&]<class T>() {
 		if constexpr (std::is_floating_point_v<T>) {
 			return NumericStats::GetMinUnsafe<T>(stats) != 0;
 		} else {

@@ -1,5 +1,6 @@
 #include "duckdb/storage/table/row_group_reorderer.hpp"
 
+#include "duckdb/common/type_util.hpp"
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/storage/statistics/numeric_stats.hpp"
 #include "duckdb/storage/statistics/string_stats.hpp"
@@ -36,34 +37,14 @@ bool EncodeString(const BaseStatistics &stats, bool min, OrderModifiers modifier
 
 bool Encode(const BaseStatistics &stats, bool min, OrderModifiers modifiers, data_ptr_t key) {
 	switch (stats.GetType().InternalType()) {
-	case PhysicalType::INT8:
-		return EncodeNumeric<int8_t>(stats, min, modifiers, key);
-	case PhysicalType::INT16:
-		return EncodeNumeric<int16_t>(stats, min, modifiers, key);
-	case PhysicalType::INT32:
-		return EncodeNumeric<int32_t>(stats, min, modifiers, key);
-	case PhysicalType::INT64:
-		return EncodeNumeric<int64_t>(stats, min, modifiers, key);
-	case PhysicalType::INT128:
-		return EncodeNumeric<hugeint_t>(stats, min, modifiers, key);
-	case PhysicalType::UINT8:
-		return EncodeNumeric<uint8_t>(stats, min, modifiers, key);
-	case PhysicalType::UINT16:
-		return EncodeNumeric<uint16_t>(stats, min, modifiers, key);
-	case PhysicalType::UINT32:
-		return EncodeNumeric<uint32_t>(stats, min, modifiers, key);
-	case PhysicalType::UINT64:
-		return EncodeNumeric<uint64_t>(stats, min, modifiers, key);
-	case PhysicalType::UINT128:
-		return EncodeNumeric<uhugeint_t>(stats, min, modifiers, key);
-	case PhysicalType::FLOAT:
-		return EncodeNumeric<float>(stats, min, modifiers, key);
-	case PhysicalType::DOUBLE:
-		return EncodeNumeric<double>(stats, min, modifiers, key);
 	case PhysicalType::VARCHAR:
 		return EncodeString(stats, min, modifiers, key);
-	default:
+	case PhysicalType::BOOL:
+	case PhysicalType::INTERVAL:
 		throw InternalException("RowGroupOrderKey: unsupported type %s", stats.GetType().ToString());
+	default:
+		return VisitPhysicalType(stats.GetType().InternalType(),
+		                         [&]<class T>() { return EncodeNumeric<T>(stats, min, modifiers, key); });
 	}
 }
 

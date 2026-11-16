@@ -304,7 +304,7 @@ unique_ptr<CompressExpression> CMHelper::CreateIntegralFunctionCompress(unique_p
 
 	auto compress_stats = BaseStatistics::CreateEmpty(target_type);
 	compress_stats.CopyBase(stats);
-	NumericStats::Visit(target_type.InternalType(), [&]<class T>() {
+	VisitPhysicalType(target_type.InternalType(), [&]<class T>() {
 		if constexpr (std::is_unsigned_v<T> && !std::is_same_v<T, bool>) {
 			NumericStats::SetMin<T>(compress_stats, 0);
 			NumericStats::SetMax<T>(compress_stats, UnsafeNumericCast<T>(range));

@@ -195,4 +195,46 @@ LogicalType PrimitiveToLogicalType() {
 	}
 }
 
+template <bool STRINGS = false, class OP>
+auto VisitPhysicalType(PhysicalType type, OP &&op) {
+	switch (type) {
+	case PhysicalType::BOOL:
+		return op.template operator()<bool>();
+	case PhysicalType::INT8:
+		return op.template operator()<int8_t>();
+	case PhysicalType::INT16:
+		return op.template operator()<int16_t>();
+	case PhysicalType::INT32:
+		return op.template operator()<int32_t>();
+	case PhysicalType::INT64:
+		return op.template operator()<int64_t>();
+	case PhysicalType::UINT8:
+		return op.template operator()<uint8_t>();
+	case PhysicalType::UINT16:
+		return op.template operator()<uint16_t>();
+	case PhysicalType::UINT32:
+		return op.template operator()<uint32_t>();
+	case PhysicalType::UINT64:
+		return op.template operator()<uint64_t>();
+	case PhysicalType::INT128:
+		return op.template operator()<hugeint_t>();
+	case PhysicalType::UINT128:
+		return op.template operator()<uhugeint_t>();
+	case PhysicalType::FLOAT:
+		return op.template operator()<float>();
+	case PhysicalType::DOUBLE:
+		return op.template operator()<double>();
+	case PhysicalType::INTERVAL:
+		return op.template operator()<interval_t>();
+	case PhysicalType::VARCHAR:
+		if constexpr (STRINGS) {
+			return op.template operator()<string_t>();
+		}
+		break;
+	default:
+		break;
+	}
+	throw InternalException("Unsupported physical type %s", TypeIdToString(type));
+}
+
 } // namespace duckdb

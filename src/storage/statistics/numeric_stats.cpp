@@ -30,7 +30,7 @@ bool TryCastBounds(const BaseStatistics &stats, T &min, T &max) {
 	if (!type.IsNumeric() || !NumericStats::HasMinMax(stats)) {
 		return false;
 	}
-	return NumericStats::Visit(type.InternalType(), [&]<class S>() {
+	return VisitPhysicalType(type.InternalType(), [&]<class S>() {
 		if constexpr (std::is_same_v<S, interval_t>) {
 			return false;
 		} else {
@@ -106,7 +106,7 @@ void NumericStats::Merge(BaseStatistics &stats, const BaseStatistics &other) {
 	D_ASSERT(stats.GetType() == other.GetType());
 	auto &data = GetDataUnsafe(stats);
 	const auto &other_data = GetDataUnsafe(other);
-	Visit(stats.GetType().InternalType(), [&]<class T>() {
+	VisitPhysicalType(stats.GetType().InternalType(), [&]<class T>() {
 		// If the min and max of the stats are not valid, we need to merge the min and max of the other stats.
 		if (HasMin(stats) && HasMax(stats) && GreaterThan::Operation(GetMinUnsafe<T>(stats), GetMaxUnsafe<T>(stats))) {
 			data.has_min = HasMin(other);
@@ -134,7 +134,7 @@ void NumericStats::Merge(BaseStatistics &stats, const BaseStatistics &other) {
 
 void NumericStats::ClampMin(BaseStatistics &stats, const BaseStatistics &other) {
 	D_ASSERT(stats.GetType() == other.GetType() && HasMin(stats) && HasMin(other));
-	Visit(stats.GetType().InternalType(), [&]<class T>() {
+	VisitPhysicalType(stats.GetType().InternalType(), [&]<class T>() {
 		if (LessThan::Operation(GetMinUnsafe<T>(stats), GetMinUnsafe<T>(other))) {
 			GetDataUnsafe(stats).min = GetDataUnsafe(other).min;
 		}
@@ -143,7 +143,7 @@ void NumericStats::ClampMin(BaseStatistics &stats, const BaseStatistics &other) 
 
 void NumericStats::ClampMax(BaseStatistics &stats, const BaseStatistics &other) {
 	D_ASSERT(stats.GetType() == other.GetType() && HasMax(stats) && HasMax(other));
-	Visit(stats.GetType().InternalType(), [&]<class T>() {
+	VisitPhysicalType(stats.GetType().InternalType(), [&]<class T>() {
 		if (GreaterThan::Operation(GetMaxUnsafe<T>(stats), GetMaxUnsafe<T>(other))) {
 			GetDataUnsafe(stats).max = GetDataUnsafe(other).max;
 		}
@@ -175,8 +175,8 @@ FilterPropagateResult NumericStats::CheckZonemap(const BaseStatistics &stats, Ex
 		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	}
 	D_ASSERT(stats.CanHaveNoNull());
-	return Visit(stats.GetType().InternalType(),
-	             [&]<class T>() { return CheckZonemapTemplated<T>(stats, comparison_type, constants); });
+	return VisitPhysicalType(stats.GetType().InternalType(),
+	                         [&]<class T>() { return CheckZonemapTemplated<T>(stats, comparison_type, constants); });
 }
 
 bool NumericStats::ConstantsCoverRange(const BaseStatistics &stats, array_ptr<const Value> constants) {
@@ -220,7 +220,7 @@ bool NumericStats::IsConstant(const BaseStatistics &stats) {
 	if (!HasMin(stats) || !HasMax(stats)) {
 		throw InternalException("IsConstant() called on statistics that does not have min and max");
 	}
-	return Visit(stats.GetType().InternalType(), [&]<class T>() {
+	return VisitPhysicalType(stats.GetType().InternalType(), [&]<class T>() {
 		const auto min = GetMinUnsafe<T>(stats);
 		const auto max = GetMaxUnsafe<T>(stats);
 		if (GreaterThan::Operation(max, min)) {
@@ -342,7 +342,7 @@ Value NumericValueUnionToValue(const LogicalType &type, const NumericValueUnion 
 }
 
 bool NumericStats::HasMinMax(const BaseStatistics &stats) {
-	return HasMin(stats) && HasMax(stats) && Visit(stats.GetType().InternalType(), [&]<class T>() {
+	return HasMin(stats) && HasMax(stats) && VisitPhysicalType(stats.GetType().InternalType(), [&]<class T>() {
 		       return LessThanEquals::Operation(GetMinUnsafe<T>(stats), GetMaxUnsafe<T>(stats));
 	       });
 }

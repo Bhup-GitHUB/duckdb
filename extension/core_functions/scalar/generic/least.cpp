@@ -493,7 +493,7 @@ unique_ptr<BaseStatistics> PropagateLeastGreatestStats(ClientContext &context, F
 			return nullptr;
 		}
 	}
-	return NumericStats::Visit(return_type.InternalType(), [&]<class T>() {
+	return VisitPhysicalType(return_type.InternalType(), [&]<class T>() {
 		return PropagateLeastGreatestStats<LEAST_GREATER_OP, T>(child_stats, return_type);
 	});
 }

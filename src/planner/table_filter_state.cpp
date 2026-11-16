@@ -1,6 +1,7 @@
 #include "duckdb/planner/table_filter_state.hpp"
 #include "duckdb/common/bit_utils.hpp"
 #include "duckdb/common/operator/comparison_operators.hpp"
+#include "duckdb/common/type_util.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/common/vector/constant_vector.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
@@ -143,44 +144,7 @@ static auto DispatchComparison(ExpressionType comparison, FUNC &func) {
 
 template <bool STRINGS = true, class FUNC>
 static auto DispatchComparison(PhysicalType type, ExpressionType comparison, FUNC &&func) {
-	switch (type) {
-	case PhysicalType::BOOL:
-		return DispatchComparison<bool>(comparison, func);
-	case PhysicalType::INT8:
-		return DispatchComparison<int8_t>(comparison, func);
-	case PhysicalType::INT16:
-		return DispatchComparison<int16_t>(comparison, func);
-	case PhysicalType::INT32:
-		return DispatchComparison<int32_t>(comparison, func);
-	case PhysicalType::INT64:
-		return DispatchComparison<int64_t>(comparison, func);
-	case PhysicalType::INT128:
-		return DispatchComparison<hugeint_t>(comparison, func);
-	case PhysicalType::UINT8:
-		return DispatchComparison<uint8_t>(comparison, func);
-	case PhysicalType::UINT16:
-		return DispatchComparison<uint16_t>(comparison, func);
-	case PhysicalType::UINT32:
-		return DispatchComparison<uint32_t>(comparison, func);
-	case PhysicalType::UINT64:
-		return DispatchComparison<uint64_t>(comparison, func);
-	case PhysicalType::UINT128:
-		return DispatchComparison<uhugeint_t>(comparison, func);
-	case PhysicalType::FLOAT:
-		return DispatchComparison<float>(comparison, func);
-	case PhysicalType::DOUBLE:
-		return DispatchComparison<double>(comparison, func);
-	case PhysicalType::INTERVAL:
-		return DispatchComparison<interval_t>(comparison, func);
-	case PhysicalType::VARCHAR:
-		if constexpr (STRINGS) {
-			return DispatchComparison<string_t>(comparison, func);
-		} else {
-			throw InternalException("Comparison filter executor has no mask kernel for strings");
-		}
-	default:
-		throw InternalException("Unsupported physical type for comparison filter executor");
-	}
+	return VisitPhysicalType<STRINGS>(type, [&]<class T>() { return DispatchComparison<T>(comparison, func); });
 }
 
 class ComparisonFilterExecutor final : public ExpressionFilterExecutor {

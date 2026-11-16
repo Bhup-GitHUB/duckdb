@@ -108,7 +108,7 @@ FilterPropagateResult StatisticsPropagator::PropagateComparison(const BaseStatis
 		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	}
 	const bool has_null = lstats.CanHaveNull() || rstats.CanHaveNull();
-	return NumericStats::Visit(lstats.GetType().InternalType(), [&]<class T>() {
+	return VisitPhysicalType(lstats.GetType().InternalType(), [&]<class T>() {
 		const auto lmin = NumericStats::GetMinUnsafe<T>(lstats);
 		const auto lmax = NumericStats::GetMaxUnsafe<T>(lstats);
 		const auto rmin = NumericStats::GetMinUnsafe<T>(rstats);

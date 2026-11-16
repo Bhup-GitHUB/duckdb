@@ -9,6 +9,7 @@
 
 #include "duckdb/common/bit_utils.hpp"
 #include "duckdb/common/bswap.hpp"
+#include "duckdb/common/type_util.hpp"
 #include "duckdb/common/enums/order_type.hpp"
 #include "duckdb/common/radix.hpp"
 #include "duckdb/common/swar.hpp"
@@ -973,43 +974,15 @@ idx_t CreateSortKeyHelpers::CreateSortKey(const LogicalType &type, const_data_pt
 	result[0] = SortKeyVectorData::ValidByte(modifiers.null_type);
 	const auto flip = modifiers.order_type == OrderType::DESCENDING;
 	const auto out = result + 1;
-	switch (type.InternalType()) {
-	case PhysicalType::BOOL:
-		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<bool>>(value, flip, out);
-	case PhysicalType::UINT8:
-		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<uint8_t>>(value, flip, out);
-	case PhysicalType::INT8:
-		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<int8_t>>(value, flip, out);
-	case PhysicalType::UINT16:
-		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<uint16_t>>(value, flip, out);
-	case PhysicalType::INT16:
-		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<int16_t>>(value, flip, out);
-	case PhysicalType::UINT32:
-		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<uint32_t>>(value, flip, out);
-	case PhysicalType::INT32:
-		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<int32_t>>(value, flip, out);
-	case PhysicalType::UINT64:
-		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<uint64_t>>(value, flip, out);
-	case PhysicalType::INT64:
-		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<int64_t>>(value, flip, out);
-	case PhysicalType::FLOAT:
-		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<float>>(value, flip, out);
-	case PhysicalType::DOUBLE:
-		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<double>>(value, flip, out);
-	case PhysicalType::INTERVAL:
-		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<interval_t>>(value, flip, out);
-	case PhysicalType::UINT128:
-		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<uhugeint_t>>(value, flip, out);
-	case PhysicalType::INT128:
-		return 1 + EncodeSortKeyValue<SortKeyConstantOperator<hugeint_t>>(value, flip, out);
-	case PhysicalType::VARCHAR:
-		if (type.id() == LogicalTypeId::VARCHAR) {
-			return 1 + EncodeSortKeyValue<SortKeyVarcharOperator>(value, flip, out);
-		}
-		return 1 + EncodeSortKeyValue<SortKeyBlobOperator>(value, flip, out);
-	default:
-		throw NotImplementedException("Unsupported type %s in CreateSortKey", type);
-	}
+	return 1 + VisitPhysicalType<true>(type.InternalType(), [&]<class T>() {
+		       if constexpr (!std::is_same_v<T, string_t>) {
+			       return EncodeSortKeyValue<SortKeyConstantOperator<T>>(value, flip, out);
+		       } else if (type.id() == LogicalTypeId::VARCHAR) {
+			       return EncodeSortKeyValue<SortKeyVarcharOperator>(value, flip, out);
+		       } else {
+			       return EncodeSortKeyValue<SortKeyBlobOperator>(value, flip, out);
+		       }
+	       });
 }
 
 void CreateSortKeyHelpers::CreateSortKey(DataChunk &input, const vector<OrderModifiers> &modifiers, data_ptr_t *targets,

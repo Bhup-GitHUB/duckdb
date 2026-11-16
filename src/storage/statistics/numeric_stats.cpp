@@ -2,6 +2,7 @@
 
 #include "duckdb/common/algorithm.hpp"
 #include "duckdb/common/numeric_utils.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/operator/comparison_operators.hpp"
 #include "duckdb/common/operator/subtract.hpp"
 #include "duckdb/common/serializer/deserializer.hpp"
@@ -9,6 +10,7 @@
 #include "duckdb/common/types/vector.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 
+#include <cmath>
 #include <limits>
 
 namespace duckdb {
@@ -380,6 +382,25 @@ bool NumericStats::HasMinMax(const BaseStatistics &stats) {
 	return HasMin(stats) && HasMax(stats) && VisitNumeric(stats.GetType().InternalType(), [&]<class T>() {
 		       return LessThanEquals::Operation(GetMinUnsafe<T>(stats), GetMaxUnsafe<T>(stats));
 	       });
+}
+
+bool NumericStats::TryGetDoubleRange(const BaseStatistics &stats, double &min, double &max) {
+	const auto &type = stats.GetType();
+	if (!type.IsNumeric() || !HasMinMax(stats)) {
+		return false;
+	}
+	VisitNumeric(type.InternalType(), [&]<class T>() {
+		if constexpr (!std::is_same_v<T, interval_t>) {
+			min = Cast::Operation<T, double>(GetMinUnsafe<T>(stats));
+			max = Cast::Operation<T, double>(GetMaxUnsafe<T>(stats));
+		}
+	});
+	if (type.id() == LogicalTypeId::DECIMAL) {
+		const auto scale = std::pow(10.0, DecimalType::GetScale(type));
+		min /= scale;
+		max /= scale;
+	}
+	return true;
 }
 
 bool NumericStats::HasMin(const BaseStatistics &stats) {

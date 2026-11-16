@@ -358,9 +358,6 @@ class NullFilterExecutor final : public ExpressionFilterExecutor {
 public:
 	idx_t FilterSelection(SelectionVector &sel, Vector &vector, idx_t scan_count,
 	                      idx_t &approved_tuple_count) override {
-		if (approved_tuple_count == 0) {
-			return 0;
-		}
 		if (current_capacity < approved_tuple_count) {
 			result_sel.Initialize(approved_tuple_count);
 			current_capacity = approved_tuple_count;

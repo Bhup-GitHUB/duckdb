@@ -1,4 +1,5 @@
 #include "duckdb/planner/table_filter_state.hpp"
+#include "duckdb/common/bit_utils.hpp"
 #include "duckdb/common/operator/comparison_operators.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/common/vector/constant_vector.hpp"
@@ -6,6 +7,7 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
@@ -35,6 +37,44 @@ bool ExpressionFilterExecutor::FilterValue(const_data_ptr_t value, bool valid) {
 	throw InternalException("FilterValue called on a filter executor that does not filter single values");
 }
 
+static constexpr idx_t MASK_WORDS = STANDARD_VECTOR_SIZE / 64;
+
+static void ClearMaskTail(uint64_t *mask, idx_t count) {
+	if (count % 64 != 0) {
+		mask[count / 64] &= (uint64_t(1) << (count % 64)) - 1;
+	}
+}
+
+void ExpressionFilterExecutor::FilterMask(Vector &vector, idx_t count, uint64_t *mask) {
+	D_ASSERT(count <= STANDARD_VECTOR_SIZE);
+	SelectionVector sel;
+	idx_t approved = count;
+	FilterSelection(sel, vector, count, approved);
+	if (approved == count) {
+		ClearMaskTail(mask, count);
+		return;
+	}
+	uint64_t kept[MASK_WORDS] = {};
+	for (idx_t i = 0; i < approved; i++) {
+		const auto row = sel.get_index(i);
+		kept[row / 64] |= uint64_t(1) << (row % 64);
+	}
+	for (idx_t w = 0; w < (count + 63) / 64; w++) {
+		mask[w] &= kept[w];
+	}
+}
+
+//! Appends the positions of the set bits of the first `count` rows' mask to `sel`
+static idx_t MaskToSelection(const uint64_t *mask, idx_t count, sel_t *sel) {
+	idx_t result_count = 0;
+	for (idx_t w = 0; w < (count + 63) / 64; w++) {
+		for (auto bits = mask[w]; bits != 0; bits &= bits - 1) {
+			sel[result_count++] = UnsafeNumericCast<sel_t>(w * 64 + CountZeros<uint64_t>::Trailing(bits));
+		}
+	}
+	return result_count;
+}
+
 class ConjunctionAndFilterExecutor final : public ExpressionFilterExecutor {
 public:
 	explicit ConjunctionAndFilterExecutor(vector<unique_ptr<ExpressionFilterExecutor>> children_p)
@@ -54,6 +94,12 @@ public:
 			}
 		}
 		return approved_tuple_count;
+	}
+
+	void FilterMask(Vector &vector, idx_t count, uint64_t *mask) override {
+		for (auto &child : children) {
+			child->FilterMask(vector, count, mask);
+		}
 	}
 
 	bool FiltersValues() const override {
@@ -81,6 +127,10 @@ public:
 		return approved_tuple_count;
 	}
 
+	void FilterMask(Vector &vector, idx_t count, uint64_t *mask) override {
+		ClearMaskTail(mask, count);
+	}
+
 	bool FiltersValues() const override {
 		return true;
 	}
@@ -90,14 +140,76 @@ public:
 	}
 };
 
+template <class T, class FUNC>
+static auto DispatchComparison(ExpressionType comparison, FUNC &func) {
+	switch (comparison) {
+	case ExpressionType::COMPARE_EQUAL:
+		return func.template operator()<T, Equals>();
+	case ExpressionType::COMPARE_NOTEQUAL:
+		return func.template operator()<T, NotEquals>();
+	case ExpressionType::COMPARE_GREATERTHAN:
+		return func.template operator()<T, GreaterThan>();
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		return func.template operator()<T, GreaterThanEquals>();
+	case ExpressionType::COMPARE_LESSTHAN:
+		return func.template operator()<T, LessThan>();
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		return func.template operator()<T, LessThanEquals>();
+	default:
+		throw InternalException("Unsupported comparison type for comparison filter executor");
+	}
+}
+
+//! Calls `func.template operator()<T, OP>()` with the C++ type of `type` and the operator of `comparison`
+template <class FUNC>
+static auto DispatchComparison(PhysicalType type, ExpressionType comparison, FUNC &&func) {
+	switch (type) {
+	case PhysicalType::BOOL:
+		return DispatchComparison<bool>(comparison, func);
+	case PhysicalType::INT8:
+		return DispatchComparison<int8_t>(comparison, func);
+	case PhysicalType::INT16:
+		return DispatchComparison<int16_t>(comparison, func);
+	case PhysicalType::INT32:
+		return DispatchComparison<int32_t>(comparison, func);
+	case PhysicalType::INT64:
+		return DispatchComparison<int64_t>(comparison, func);
+	case PhysicalType::INT128:
+		return DispatchComparison<hugeint_t>(comparison, func);
+	case PhysicalType::UINT8:
+		return DispatchComparison<uint8_t>(comparison, func);
+	case PhysicalType::UINT16:
+		return DispatchComparison<uint16_t>(comparison, func);
+	case PhysicalType::UINT32:
+		return DispatchComparison<uint32_t>(comparison, func);
+	case PhysicalType::UINT64:
+		return DispatchComparison<uint64_t>(comparison, func);
+	case PhysicalType::UINT128:
+		return DispatchComparison<uhugeint_t>(comparison, func);
+	case PhysicalType::FLOAT:
+		return DispatchComparison<float>(comparison, func);
+	case PhysicalType::DOUBLE:
+		return DispatchComparison<double>(comparison, func);
+	case PhysicalType::INTERVAL:
+		return DispatchComparison<interval_t>(comparison, func);
+	case PhysicalType::VARCHAR:
+		return DispatchComparison<string_t>(comparison, func);
+	default:
+		throw InternalException("Unsupported physical type for comparison filter executor");
+	}
+}
+
 class ComparisonFilterExecutor final : public ExpressionFilterExecutor {
 public:
 	ComparisonFilterExecutor(ExpressionType comparison_type_p, Value constant_p)
-	    : comparison_type(comparison_type_p), constant(std::move(constant_p)), compare_value(ResolveCompareValue()) {
+	    : comparison_type(comparison_type_p), constant(std::move(constant_p)),
+	      compare_value(
+	          DispatchComparison(constant.type().InternalType(), comparison_type,
+	                             []<class T, class OP>() -> compare_value_t { return CompareValue<T, OP>; })) {
 	}
 
 	bool FiltersValues() const override {
-		return constant.IsNull() || compare_value;
+		return true;
 	}
 
 	bool FilterValue(const_data_ptr_t value, bool valid) override {
@@ -119,11 +231,25 @@ public:
 		const auto before_count = approved_tuple_count;
 		if (constant.IsNull()) {
 			approved_tuple_count = 0;
+		} else if (!sel.IsSet() && vector.GetVectorType() == VectorType::FLAT_VECTOR &&
+		           approved_tuple_count <= STANDARD_VECTOR_SIZE) {
+			uint64_t mask[MASK_WORDS];
+			std::fill_n(mask, (approved_tuple_count + 63) / 64, ~uint64_t(0));
+			DispatchComparison(constant.type().InternalType(), comparison_type,
+			                   [&]<class T, class OP>() { MaskFlat<T, OP>(vector, approved_tuple_count, mask); });
+			approved_tuple_count = MaskToSelection(mask, approved_tuple_count, result_sel.data());
 		} else {
 			UnifiedVectorFormat vdata;
 			vector.ToUnifiedFormat(vdata);
 			auto &current_sel = sel.IsSet() ? sel : *FlatVector::IncrementalSelectionVector();
-			approved_tuple_count = Select(vdata, current_sel, approved_tuple_count);
+			approved_tuple_count =
+			    DispatchComparison(constant.type().InternalType(), comparison_type, [&]<class T, class OP>() {
+				    const auto predicate = constant.GetValueUnsafe<T>();
+				    if (vdata.validity.CannotHaveNull()) {
+					    return TemplatedSelect<T, OP, false>(vdata, predicate, current_sel, approved_tuple_count);
+				    }
+				    return TemplatedSelect<T, OP, true>(vdata, predicate, current_sel, approved_tuple_count);
+			    });
 		}
 		if (approved_tuple_count != before_count) {
 			sel.Initialize(result_sel);
@@ -131,7 +257,36 @@ public:
 		return approved_tuple_count;
 	}
 
+	void FilterMask(Vector &vector, idx_t count, uint64_t *mask) override {
+		if (constant.IsNull()) {
+			std::fill_n(mask, (count + 63) / 64, uint64_t(0));
+			return;
+		}
+		if (vector.GetVectorType() != VectorType::FLAT_VECTOR) {
+			ExpressionFilterExecutor::FilterMask(vector, count, mask);
+			return;
+		}
+		DispatchComparison(constant.type().InternalType(), comparison_type,
+		                   [&]<class T, class OP>() { MaskFlat<T, OP>(vector, count, mask); });
+	}
+
 private:
+	template <class T, class OP>
+	void MaskFlat(const Vector &vector, idx_t count, uint64_t *mask) const {
+		const auto data = FlatVector::GetData<T>(vector);
+		const auto validity = FlatVector::Validity(vector).GetData();
+		const auto predicate = constant.GetValueUnsafe<T>();
+		for (idx_t first = 0; first < count; first += 64) {
+			const auto rows = MinValue<idx_t>(64, count - first);
+			uint64_t bits = 0;
+			for (idx_t j = 0; j < rows; j++) {
+				bits |= uint64_t(OP::Operation(data[first + j], predicate)) << j;
+			}
+			const auto w = first / 64;
+			mask[w] &= validity ? bits & validity[w] : bits;
+		}
+	}
+
 	template <class T, class OP, bool CAN_HAVE_NULL>
 	idx_t TemplatedSelect(const UnifiedVectorFormat &vdata, T predicate, const SelectionVector &sel,
 	                      idx_t approved_tuple_count) {
@@ -149,72 +304,6 @@ private:
 		return result_count;
 	}
 
-	template <class T, class OP>
-	idx_t SelectOperation(const UnifiedVectorFormat &vdata, const SelectionVector &sel, idx_t approved_tuple_count) {
-		auto predicate = constant.GetValueUnsafe<T>();
-		if (vdata.validity.CannotHaveNull()) {
-			return TemplatedSelect<T, OP, false>(vdata, predicate, sel, approved_tuple_count);
-		}
-		return TemplatedSelect<T, OP, true>(vdata, predicate, sel, approved_tuple_count);
-	}
-
-	template <class T>
-	idx_t SelectTyped(const UnifiedVectorFormat &vdata, const SelectionVector &sel, idx_t approved_tuple_count) {
-		switch (comparison_type) {
-		case ExpressionType::COMPARE_EQUAL:
-			return SelectOperation<T, Equals>(vdata, sel, approved_tuple_count);
-		case ExpressionType::COMPARE_NOTEQUAL:
-			return SelectOperation<T, NotEquals>(vdata, sel, approved_tuple_count);
-		case ExpressionType::COMPARE_GREATERTHAN:
-			return SelectOperation<T, GreaterThan>(vdata, sel, approved_tuple_count);
-		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-			return SelectOperation<T, GreaterThanEquals>(vdata, sel, approved_tuple_count);
-		case ExpressionType::COMPARE_LESSTHAN:
-			return SelectOperation<T, LessThan>(vdata, sel, approved_tuple_count);
-		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-			return SelectOperation<T, LessThanEquals>(vdata, sel, approved_tuple_count);
-		default:
-			throw InternalException("Unsupported comparison type for comparison filter executor");
-		}
-	}
-
-	idx_t Select(const UnifiedVectorFormat &vdata, const SelectionVector &sel, idx_t approved_tuple_count) {
-		switch (constant.type().InternalType()) {
-		case PhysicalType::BOOL:
-			return SelectTyped<bool>(vdata, sel, approved_tuple_count);
-		case PhysicalType::INT8:
-			return SelectTyped<int8_t>(vdata, sel, approved_tuple_count);
-		case PhysicalType::INT16:
-			return SelectTyped<int16_t>(vdata, sel, approved_tuple_count);
-		case PhysicalType::INT32:
-			return SelectTyped<int32_t>(vdata, sel, approved_tuple_count);
-		case PhysicalType::INT64:
-			return SelectTyped<int64_t>(vdata, sel, approved_tuple_count);
-		case PhysicalType::INT128:
-			return SelectTyped<hugeint_t>(vdata, sel, approved_tuple_count);
-		case PhysicalType::UINT8:
-			return SelectTyped<uint8_t>(vdata, sel, approved_tuple_count);
-		case PhysicalType::UINT16:
-			return SelectTyped<uint16_t>(vdata, sel, approved_tuple_count);
-		case PhysicalType::UINT32:
-			return SelectTyped<uint32_t>(vdata, sel, approved_tuple_count);
-		case PhysicalType::UINT64:
-			return SelectTyped<uint64_t>(vdata, sel, approved_tuple_count);
-		case PhysicalType::UINT128:
-			return SelectTyped<uhugeint_t>(vdata, sel, approved_tuple_count);
-		case PhysicalType::FLOAT:
-			return SelectTyped<float>(vdata, sel, approved_tuple_count);
-		case PhysicalType::DOUBLE:
-			return SelectTyped<double>(vdata, sel, approved_tuple_count);
-		case PhysicalType::INTERVAL:
-			return SelectTyped<interval_t>(vdata, sel, approved_tuple_count);
-		case PhysicalType::VARCHAR:
-			return SelectTyped<string_t>(vdata, sel, approved_tuple_count);
-		default:
-			throw InternalException("Unsupported physical type for comparison filter executor");
-		}
-	}
-
 	void PrepareCapacity(idx_t count) {
 		if (current_capacity >= count) {
 			return;
@@ -228,63 +317,6 @@ private:
 	template <class T, class OP>
 	static bool CompareValue(const_data_ptr_t value, const Value &constant) {
 		return OP::Operation(Load<T>(value), constant.GetValueUnsafe<T>());
-	}
-
-	template <class T>
-	compare_value_t ResolveCompareValueTyped() const {
-		switch (comparison_type) {
-		case ExpressionType::COMPARE_EQUAL:
-			return CompareValue<T, Equals>;
-		case ExpressionType::COMPARE_NOTEQUAL:
-			return CompareValue<T, NotEquals>;
-		case ExpressionType::COMPARE_GREATERTHAN:
-			return CompareValue<T, GreaterThan>;
-		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-			return CompareValue<T, GreaterThanEquals>;
-		case ExpressionType::COMPARE_LESSTHAN:
-			return CompareValue<T, LessThan>;
-		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-			return CompareValue<T, LessThanEquals>;
-		default:
-			return nullptr;
-		}
-	}
-
-	compare_value_t ResolveCompareValue() const {
-		switch (constant.type().InternalType()) {
-		case PhysicalType::BOOL:
-			return ResolveCompareValueTyped<bool>();
-		case PhysicalType::INT8:
-			return ResolveCompareValueTyped<int8_t>();
-		case PhysicalType::INT16:
-			return ResolveCompareValueTyped<int16_t>();
-		case PhysicalType::INT32:
-			return ResolveCompareValueTyped<int32_t>();
-		case PhysicalType::INT64:
-			return ResolveCompareValueTyped<int64_t>();
-		case PhysicalType::INT128:
-			return ResolveCompareValueTyped<hugeint_t>();
-		case PhysicalType::UINT8:
-			return ResolveCompareValueTyped<uint8_t>();
-		case PhysicalType::UINT16:
-			return ResolveCompareValueTyped<uint16_t>();
-		case PhysicalType::UINT32:
-			return ResolveCompareValueTyped<uint32_t>();
-		case PhysicalType::UINT64:
-			return ResolveCompareValueTyped<uint64_t>();
-		case PhysicalType::UINT128:
-			return ResolveCompareValueTyped<uhugeint_t>();
-		case PhysicalType::FLOAT:
-			return ResolveCompareValueTyped<float>();
-		case PhysicalType::DOUBLE:
-			return ResolveCompareValueTyped<double>();
-		case PhysicalType::INTERVAL:
-			return ResolveCompareValueTyped<interval_t>();
-		case PhysicalType::VARCHAR:
-			return ResolveCompareValueTyped<string_t>();
-		default:
-			return nullptr;
-		}
 	}
 
 	ExpressionType comparison_type;
@@ -307,6 +339,15 @@ public:
 			return approved_tuple_count;
 		}
 		return comparison->FilterSelection(sel, vector, scan_count, approved_tuple_count);
+	}
+
+	void FilterMask(Vector &vector, idx_t count, uint64_t *mask) override {
+		Refresh();
+		if (comparison) {
+			comparison->FilterMask(vector, count, mask);
+		} else {
+			ClearMaskTail(mask, count);
+		}
 	}
 
 	bool FiltersValues() const override {
@@ -342,6 +383,74 @@ private:
 	LogicalType column_type;
 	idx_t version = 0;
 	unique_ptr<ComparisonFilterExecutor> comparison;
+};
+
+template <bool IS_NULL>
+class NullFilterExecutor final : public ExpressionFilterExecutor {
+public:
+	idx_t FilterSelection(SelectionVector &sel, Vector &vector, idx_t scan_count,
+	                      idx_t &approved_tuple_count) override {
+		if (approved_tuple_count == 0) {
+			return 0;
+		}
+		if (current_capacity < approved_tuple_count) {
+			result_sel.Initialize(approved_tuple_count);
+			current_capacity = approved_tuple_count;
+		}
+		UnifiedVectorFormat vdata;
+		vector.ToUnifiedFormat(vdata);
+		if (vdata.validity.CannotHaveNull()) {
+			if (IS_NULL) {
+				approved_tuple_count = 0;
+				sel.Initialize(result_sel);
+			}
+			return approved_tuple_count;
+		}
+		auto &current_sel = sel.IsSet() ? sel : *FlatVector::IncrementalSelectionVector();
+		idx_t result_count = 0;
+		for (idx_t i = 0; i < approved_tuple_count; i++) {
+			const auto idx = current_sel.get_index(i);
+			result_sel.set_index(result_count, idx);
+			result_count += vdata.validity.RowIsValid(vdata.sel->get_index(idx)) != IS_NULL;
+		}
+		if (result_count != approved_tuple_count) {
+			sel.Initialize(result_sel);
+			approved_tuple_count = result_count;
+		}
+		return approved_tuple_count;
+	}
+
+	void FilterMask(Vector &vector, idx_t count, uint64_t *mask) override {
+		if (vector.GetVectorType() != VectorType::FLAT_VECTOR) {
+			ExpressionFilterExecutor::FilterMask(vector, count, mask);
+			return;
+		}
+		const auto words = (count + 63) / 64;
+		const auto validity = FlatVector::Validity(vector).GetData();
+		if (!validity) {
+			if (IS_NULL) {
+				std::fill_n(mask, words, uint64_t(0));
+			}
+			ClearMaskTail(mask, count);
+			return;
+		}
+		for (idx_t w = 0; w < words; w++) {
+			mask[w] &= IS_NULL ? ~validity[w] : validity[w];
+		}
+		ClearMaskTail(mask, count);
+	}
+
+	bool FiltersValues() const override {
+		return true;
+	}
+
+	bool FilterValue(const_data_ptr_t value, bool valid) override {
+		return valid != IS_NULL;
+	}
+
+private:
+	SelectionVector result_sel;
+	idx_t current_capacity = 0;
 };
 
 class SelectivityOptionalFilterExecutor final : public ExpressionFilterExecutor {
@@ -760,6 +869,20 @@ static unique_ptr<ExpressionFilterExecutor> TryCreateFastExecutor(const Expressi
 	switch (expression.GetExpressionClass()) {
 	case ExpressionClass::BOUND_FUNCTION:
 		return TryCreateFunctionExecutor(expression.Cast<BoundFunctionExpression>(), inside_selectivity_optional);
+	case ExpressionClass::BOUND_OPERATOR: {
+		auto &op = expression.Cast<BoundOperatorExpression>();
+		if (op.GetChildren().size() != 1 || !IsColumnReferenceExpression(*op.GetChildren()[0])) {
+			return nullptr;
+		}
+		switch (op.GetExpressionType()) {
+		case ExpressionType::OPERATOR_IS_NULL:
+			return make_uniq<NullFilterExecutor<true>>();
+		case ExpressionType::OPERATOR_IS_NOT_NULL:
+			return make_uniq<NullFilterExecutor<false>>();
+		default:
+			return nullptr;
+		}
+	}
 	case ExpressionClass::BOUND_CONJUNCTION: {
 		if (expression.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
 			return nullptr;

@@ -8,9 +8,9 @@ namespace duckdb {
 
 void CompressedMaterialization::CompressAggregate(unique_ptr<LogicalOperator> &op) {
 	auto &aggregate = op->Cast<LogicalAggregate>();
-	if (aggregate.group_limit.filter || !aggregate.group_limit.columns.empty()) {
-		return;
-	}
+	const auto &group_limit = aggregate.group_limit;
+	const auto filtered_group =
+	    group_limit.filter ? optional_idx(group_limit.columns.empty() ? 0 : group_limit.columns[0]) : optional_idx();
 	auto &groups = aggregate.groups;
 	column_binding_set_t group_binding_set;
 	for (const auto &group : groups) {
@@ -56,10 +56,11 @@ void CompressedMaterialization::CompressAggregate(unique_ptr<LogicalOperator> &o
 	};
 	for (idx_t group_idx = 0; group_idx < groups.size(); group_idx++) {
 		auto &group_expr = *groups[group_idx];
-		const bool bucketed = bucketed_groups.contains(bindings_out[group_idx]);
+		const bool keep = bucketed_groups.contains(bindings_out[group_idx]) ||
+		                  (filtered_group.IsValid() && filtered_group.GetIndex() == group_idx);
 		if (group_expr.GetExpressionType() == ExpressionType::BOUND_COLUMN_REF) {
 			auto &colref = group_expr.Cast<BoundColumnRefExpression>();
-			if (bucketed) {
+			if (keep) {
 				referenced_bindings.insert(colref.Binding());
 			} else {
 				group_bindings[group_idx] = colref.Binding();
@@ -70,7 +71,7 @@ void CompressedMaterialization::CompressAggregate(unique_ptr<LogicalOperator> &o
 		// Mark the bindings referenced by the non-colref expression so they won't be modified
 		GetReferencedBindings(group_expr, referenced_bindings);
 
-		if (bucketed) {
+		if (keep) {
 			continue;
 		}
 

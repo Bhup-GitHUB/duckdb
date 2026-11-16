@@ -176,6 +176,29 @@ SELECT count(*) FROM (SELECT x, s FROM narrow GROUP BY x, s LIMIT 5)
 5
 
 statement ok
+CREATE TABLE w AS SELECT i // 7 AS a, (1000 + i % 50)::INTEGER AS b FROM range(2000000) r(i)
+
+query II
+EXPLAIN SELECT a, b, count(*) FROM w GROUP BY a, b ORDER BY a, b LIMIT 4
+----
+physical_plan	<REGEX>:.*Group Limit: 4.*__internal_compress_integral.*
+
+query III
+SELECT a, b, count(*) FROM w GROUP BY a, b ORDER BY a, b LIMIT 4
+----
+0	1000	1
+0	1001	1
+0	1002	1
+0	1003	1
+
+query III
+SELECT b, a, count(*) FROM w GROUP BY a, b ORDER BY b DESC, a LIMIT 3
+----
+1049	7	1
+1049	14	1
+1049	21	1
+
+statement ok
 CREATE TABLE days AS SELECT DATE '2024-01-01' + (i // 10000)::INTEGER AS day, i FROM range(1000000) r(i)
 
 query II

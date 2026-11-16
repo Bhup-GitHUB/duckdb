@@ -68,3 +68,8 @@ query I
 SELECT max(v, 2) FROM l
 ----
 [[2, 98], [2, 95]]
+
+query II
+SELECT length((max(s, 1))[1]), length((arg_max(s, i, 1))[1]) FROM (VALUES (1, repeat('a', 20)), (2, repeat('b', 200))) t(i, s)
+----
+200	200

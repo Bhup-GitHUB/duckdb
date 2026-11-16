@@ -325,11 +325,11 @@ LoadMetadata(ClientContext &context, Allocator &allocator, CachingFileHandle &fi
 		transport.SetLocation(metadata_pos);
 		transport.Prefetch(metadata_pos, total_footer_len);
 
-		auto read_head = transport.GetReadHead(metadata_pos);
-		auto data_ptr = read_head->buffer_ptr;
+		data_t footer_end[8];
+		transport.GetReadHead(metadata_pos)->CopyTo(footer_end, footer_len, sizeof(footer_end));
 
 		uint32_t read_footer_len;
-		ParseParquetFooter(data_ptr + footer_len, file_handle.GetPath(), file_size, encryption_config, read_footer_len,
+		ParseParquetFooter(footer_end, file_handle.GetPath(), file_size, encryption_config, read_footer_len,
 		                   footer_encrypted);
 		if (read_footer_len != footer_len) {
 			throw InvalidInputException("Parquet footer length stored in file is not equal to footer length provided");

@@ -483,6 +483,10 @@ void OperatorMetrics::Accumulate(const OperatorMetrics &other) {
 void OperatorMetrics::Merge(const OperatorMetrics &other) {
 	MergeInternal(other);
 	total_row_groups_to_scan = MaxValue<idx_t>(total_row_groups_to_scan, other.total_row_groups_to_scan);
+	if (other.nested_version > nested_version) {
+		nested = other.nested;
+		nested_version = other.nested_version;
+	}
 }
 
 void OperatorProfiler::EndOperator(optional_ptr<DataChunk> chunk) {
@@ -990,6 +994,33 @@ void QueryProfiler::Print() {
 	PrintProfilerOutput(renderer.get());
 }
 
+static void SetNestedDepth(ProfilingNode &node, idx_t depth) {
+	node.depth = depth;
+	for (auto &child : node.children) {
+		SetNestedDepth(*child, depth + 1);
+	}
+}
+
+static void AttachNestedNodes(ProfilingNode &node) {
+	auto &metrics = node.GetOperatorMetrics();
+	if (auto nested = std::move(metrics.nested)) {
+		metrics.nested_version = 0;
+		auto &nested_metrics = nested->GetOperatorMetrics();
+		for (auto &entry : nested_metrics.GetExtraInfo()) {
+			metrics.AddExtraInfo(entry.first, entry.second);
+		}
+		for (auto &child : nested->children) {
+			SetNestedDepth(*child, node.depth + 1);
+			node.AddChild(std::move(child));
+		}
+		metrics.time = MaxValue<double>(metrics.time - nested_metrics.time, 0);
+		return;
+	}
+	for (idx_t i = 0; i < node.GetChildCount(); i++) {
+		AttachNestedNodes(*node.GetChild(i));
+	}
+}
+
 static void MergeOperatorMeasurements(ProfilingNode &root, OperatorMetrics &result) {
 	// merge in this layer
 	result.Accumulate(root.GetOperatorMetrics());
@@ -1036,6 +1067,7 @@ void QueryProfiler::FinalizeMetricsInternal() {
 		// collapse secure views first - the query-wide totals are sums over the operator tree, so leaving the
 		// operators of the view in would expose how much of the table behind it was scanned. The time of the view
 		// is accumulated onto its boundary node, so the total CPU time still covers the whole query.
+		AttachNestedNodes(*root);
 		CollapseSecureViews(*root);
 		OperatorMetrics cumulative_metrics;
 		MergeOperatorMeasurements(*root, cumulative_metrics);

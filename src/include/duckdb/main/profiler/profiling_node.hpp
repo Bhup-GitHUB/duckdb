@@ -14,6 +14,8 @@
 
 namespace duckdb {
 
+class ProfilingNode;
+
 struct OperatorMetrics {
 	explicit OperatorMetrics() {
 		ResetMetrics();
@@ -30,6 +32,8 @@ struct OperatorMetrics {
 	idx_t rows_scanned;
 	idx_t row_groups_scanned;
 	idx_t total_row_groups_to_scan;
+	shared_ptr<ProfilingNode> nested;
+	idx_t nested_version;
 
 	profiler_metrics_t GetMetrics(const GatheredMetrics &info) const;
 	void ResetMetrics() {
@@ -43,6 +47,8 @@ struct OperatorMetrics {
 		total_row_groups_to_scan = 0;
 		operator_type = PhysicalOperatorType::INVALID;
 		extra_info.clear();
+		nested.reset();
+		nested_version = 0;
 	}
 	void AddExtraInfo(string key, ExplainValue value) {
 		extra_info.insert(make_pair(std::move(key), std::move(value)));

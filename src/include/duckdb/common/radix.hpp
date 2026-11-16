@@ -33,113 +33,20 @@ public:
 		throw NotImplementedException("Cannot read data from this type");
 	}
 
-	static inline uint8_t FlipSign(uint8_t key_byte) {
-		return key_byte ^ 128;
-	}
-
 	static inline uint32_t EncodeFloat(float x) {
-		uint32_t buff;
-		//! zero
-		if (x == 0) {
-			buff = 0;
-			buff |= (1u << 31);
-			return buff;
-		}
-
-		// nan
-		if (Value::IsNan(x)) {
-			return UINT_MAX;
-		}
-		//! infinity
-		if (x > FLT_MAX) {
-			return UINT_MAX - 1;
-		}
-		//! -infinity
-		if (x < -FLT_MAX) {
-			return 0;
-		}
-		buff = Load<uint32_t>(const_data_ptr_cast(&x));
-		if ((buff & (1U << 31)) == 0) { //! +0 and positive numbers
-			buff |= (1U << 31);
-		} else {          //! negative numbers
-			buff = ~buff; //! complement 1
-		}
-
-		return buff;
+		return EncodeFloating<float, uint32_t>(x);
 	}
 
 	static inline float DecodeFloat(uint32_t input) {
-		// nan
-		if (input == UINT_MAX) {
-			return std::numeric_limits<float>::quiet_NaN();
-		}
-		if (input == UINT_MAX - 1) {
-			return std::numeric_limits<float>::infinity();
-		}
-		if (input == 0) {
-			return -std::numeric_limits<float>::infinity();
-		}
-		float result;
-		if (input & (1U << 31)) {
-			// positive numbers - flip sign bit
-			input = input ^ (1U << 31);
-		} else {
-			// negative numbers - invert
-			input = ~input;
-		}
-		Store<uint32_t>(input, data_ptr_cast(&result));
-		return result;
+		return DecodeFloating<float, uint32_t>(input);
 	}
 
 	static inline uint64_t EncodeDouble(double x) {
-		uint64_t buff;
-		//! zero
-		if (x == 0) {
-			buff = 0;
-			buff += (1ULL << 63);
-			return buff;
-		}
-		// nan
-		if (Value::IsNan(x)) {
-			return ULLONG_MAX;
-		}
-		//! infinity
-		if (x > DBL_MAX) {
-			return ULLONG_MAX - 1;
-		}
-		//! -infinity
-		if (x < -DBL_MAX) {
-			return 0;
-		}
-		buff = Load<uint64_t>(const_data_ptr_cast(&x));
-		if (buff < (1ULL << 63)) { //! +0 and positive numbers
-			buff += (1ULL << 63);
-		} else {          //! negative numbers
-			buff = ~buff; //! complement 1
-		}
-		return buff;
+		return EncodeFloating<double, uint64_t>(x);
 	}
+
 	static inline double DecodeDouble(uint64_t input) {
-		// nan
-		if (input == ULLONG_MAX) {
-			return std::numeric_limits<double>::quiet_NaN();
-		}
-		if (input == ULLONG_MAX - 1) {
-			return std::numeric_limits<double>::infinity();
-		}
-		if (input == 0) {
-			return -std::numeric_limits<double>::infinity();
-		}
-		double result;
-		if (input & (1ULL << 63)) {
-			// positive numbers - flip sign bit
-			input = input ^ (1ULL << 63);
-		} else {
-			// negative numbers - invert
-			input = ~input;
-		}
-		Store<uint64_t>(input, data_ptr_cast(&result));
-		return result;
+		return DecodeFloating<double, uint64_t>(input);
 	}
 
 private:
@@ -147,6 +54,35 @@ private:
 	static void EncodeSigned(data_ptr_t dataptr, T value);
 	template <class T>
 	static T DecodeSigned(const_data_ptr_t input);
+
+	//! Positive numbers set the sign bit and negative numbers flip every bit, without a branch on the sign; both zeros
+	//! share a key, every NaN sorts last and the infinities take the keys next to the ends.
+	template <class F, class U>
+	static inline U EncodeFloating(F x) {
+		constexpr U SIGN = U(1) << (sizeof(U) * 8 - 1);
+		constexpr U INFINITE = std::bit_cast<U>(std::numeric_limits<F>::infinity());
+		const auto bits = Load<U>(const_data_ptr_cast(&x));
+		const auto magnitude = static_cast<U>(bits & ~SIGN);
+		if (magnitude >= INFINITE) {
+			return magnitude > INFINITE ? ~U(0) : (bits & SIGN ? U(0) : static_cast<U>(~U(0) - 1));
+		}
+		const auto key = static_cast<U>(
+		    bits ^ (static_cast<U>(static_cast<std::make_signed_t<U>>(bits) >> (sizeof(U) * 8 - 1)) | SIGN));
+		return magnitude == 0 ? SIGN : key;
+	}
+
+	template <class F, class U>
+	static inline F DecodeFloating(U input) {
+		constexpr U SIGN = U(1) << (sizeof(U) * 8 - 1);
+		if (static_cast<U>(input - 1) >= static_cast<U>(~U(0) - 2)) {
+			return input == ~U(0)
+			           ? std::numeric_limits<F>::quiet_NaN()
+			           : (input == 0 ? -std::numeric_limits<F>::infinity() : std::numeric_limits<F>::infinity());
+		}
+		const auto bits = static_cast<U>(
+		    input ^ (static_cast<U>(static_cast<std::make_signed_t<U>>(~input) >> (sizeof(U) * 8 - 1)) | SIGN));
+		return Load<F>(const_data_ptr_cast(&bits));
+	}
 };
 
 template <>
@@ -157,10 +93,8 @@ inline void Radix::EncodeData(data_ptr_t dataptr, bool value) {
 template <class T>
 void Radix::EncodeSigned(data_ptr_t dataptr, T value) {
 	using UNSIGNED = typename MakeUnsigned<T>::type;
-	UNSIGNED bytes;
-	Store<T>(value, data_ptr_cast(&bytes));
-	Store<UNSIGNED>(BSwapIfLE(bytes), dataptr);
-	dataptr[0] = FlipSign(dataptr[0]);
+	constexpr auto SIGN = static_cast<UNSIGNED>(UNSIGNED(1) << (sizeof(UNSIGNED) * 8 - 1));
+	Store<UNSIGNED>(BSwapIfLE(static_cast<UNSIGNED>(static_cast<UNSIGNED>(value) ^ SIGN)), dataptr);
 }
 
 template <>
@@ -244,12 +178,8 @@ inline bool Radix::DecodeData(const_data_ptr_t input) {
 template <class T>
 T Radix::DecodeSigned(const_data_ptr_t input) {
 	using UNSIGNED = typename MakeUnsigned<T>::type;
-	UNSIGNED bytes = Load<UNSIGNED>(input);
-	auto bytes_data = data_ptr_cast(&bytes);
-	bytes_data[0] = FlipSign(bytes_data[0]);
-	T result;
-	Store<UNSIGNED>(BSwapIfLE(bytes), data_ptr_cast(&result));
-	return result;
+	constexpr auto SIGN = static_cast<UNSIGNED>(UNSIGNED(1) << (sizeof(UNSIGNED) * 8 - 1));
+	return static_cast<T>(static_cast<UNSIGNED>(BSwapIfLE(Load<UNSIGNED>(input)) ^ SIGN));
 }
 
 template <>

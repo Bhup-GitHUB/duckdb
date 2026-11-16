@@ -1565,19 +1565,26 @@ const StringUtil::EnumStringLiteral *GetCompressionTypeValues() {
 		{ static_cast<uint32_t>(CompressionType::COMPRESSION_COL_DICT_ONPAIR), "DICT_ONPAIR" },
 		{ static_cast<uint32_t>(CompressionType::COMPRESSION_COL_ONPAIR), "ONPAIR" },
 		{ static_cast<uint32_t>(CompressionType::COMPRESSION_COL_DICT_FSST12), "DICT_FSST12" },
-		{ static_cast<uint32_t>(CompressionType::COMPRESSION_COL_FSST12), "FSST12" }
+		{ static_cast<uint32_t>(CompressionType::COMPRESSION_COL_FSST12), "FSST12" },
+		{ static_cast<uint32_t>(CompressionType::COMPRESSION_COL_FFOR), "FFOR" },
+		{ static_cast<uint32_t>(CompressionType::COMPRESSION_COL_RLE_FFOR), "RLE_FFOR" },
+		{ static_cast<uint32_t>(CompressionType::COMPRESSION_COL_DICT_FFOR), "DICT_FFOR" },
+		{ static_cast<uint32_t>(CompressionType::COMPRESSION_COL_DELTA_LZ4), "DELTA_LZ4" },
+		{ static_cast<uint32_t>(CompressionType::COMPRESSION_COL_RLE_LZ4), "RLE_LZ4" },
+		{ static_cast<uint32_t>(CompressionType::COMPRESSION_COL_DELTA_ZSTD), "DELTA_ZSTD" },
+		{ static_cast<uint32_t>(CompressionType::COMPRESSION_COL_RLE_ZSTD), "RLE_ZSTD" }
 	};
 	return values;
 }
 
 template<>
 const char* EnumUtil::ToChars<CompressionType>(CompressionType value) {
-	return StringUtil::EnumToString(GetCompressionTypeValues(), 27, "CompressionType", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetCompressionTypeValues(), 34, "CompressionType", static_cast<uint32_t>(value));
 }
 
 template<>
 CompressionType EnumUtil::FromString<CompressionType>(std::string_view value) {
-	return static_cast<CompressionType>(StringUtil::StringToEnum(GetCompressionTypeValues(), 27, "CompressionType", value));
+	return static_cast<CompressionType>(StringUtil::StringToEnum(GetCompressionTypeValues(), 34, "CompressionType", value));
 }
 
 const StringUtil::EnumStringLiteral *GetCompressionValidityValues() {

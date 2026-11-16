@@ -21,6 +21,17 @@ static bool CanResetAt(const ExtensionOption &option, SetScope effective_scope) 
 	       !(option.default_scope == SetScope::SESSION && effective_scope == SetScope::LOCAL);
 }
 
+static bool ResetToStartValue(ClientContext &context, const Identifier &name, SetScope effective_scope) {
+	auto &start_values = effective_scope == SetScope::GLOBAL ? DBConfig::GetConfig(context).options.user_options
+	                                                         : ClientConfig::GetConfig(context).session_defaults;
+	auto entry = start_values.find(name);
+	if (entry == start_values.end()) {
+		return false;
+	}
+	PhysicalSet::SetVariable(context, name, effective_scope, entry->second);
+	return true;
+}
+
 void PhysicalReset::ResetExtensionVariable(ExecutionContext &context, DBConfig &config, const Identifier &name,
                                            ExtensionOption &extension_option, SetScope effective_scope) {
 	// Compatibility: mirror the checks from PhysicalSet::SetExtensionVariable.
@@ -30,6 +41,9 @@ void PhysicalReset::ResetExtensionVariable(ExecutionContext &context, DBConfig &
 	if (effective_scope == SetScope::GLOBAL && !context.client.transaction.IsAutoCommit()) {
 		throw InvalidInputException("parameter \"%s\" is global and cannot be reset inside a transaction",
 		                            extension_option.description);
+	}
+	if (ResetToStartValue(context.client, name, effective_scope)) {
+		return;
 	}
 
 	// RESET on an option the user never SET is a no-op — don't reapply the
@@ -65,6 +79,9 @@ void PhysicalReset::ResetExtensionVariable(ExecutionContext &context, DBConfig &
 void PhysicalReset::ResetOption(ExecutionContext &context, DBConfig &config, const ConfigurationOption &option,
                                 const char *name, SetScope variable_scope) {
 	config.CheckLock(option.name);
+	if (ResetToStartValue(context.client, Identifier(name), variable_scope)) {
+		return;
+	}
 
 	if (option.default_value) {
 		// RESET on an untouched generic option is a no-op — don't fire
@@ -161,27 +178,30 @@ SourceResultType PhysicalReset::GetDataInternal(ExecutionContext &context, DataC
 		ResetAll(context, scope);
 		return SourceResultType::FINISHED;
 	}
+	ResetVariable(context, Identifier(name.ToStdString()), scope);
+	return SourceResultType::FINISHED;
+}
+
+void PhysicalReset::ResetVariable(ExecutionContext &context, const Identifier &name, SetScope scope) {
 	auto &config = DBConfig::GetConfig(context.client);
 
 	// Single-target RESET: the handler call moved inside ResetOption /
 	// ResetExtensionVariable so no-op RESETs don't reach sdb's tracker.
-	Identifier option_name(name.ToStdString());
-	auto option = DBConfig::GetOptionByName(option_name);
+	auto option = DBConfig::GetOptionByName(name);
 	if (option) {
-		ResetOption(context, config, *option, option_name.GetIdentifierName().c_str(),
+		ResetOption(context, config, *option, name.GetIdentifierName().c_str(),
 		            PhysicalSet::GetSettingScope(*option, scope));
-		return SourceResultType::FINISHED;
+		return;
 	}
 	ExtensionOption extension_option;
-	if (!config.TryGetExtensionOption(option_name, extension_option)) {
-		Catalog::AutoloadExtensionByConfigName(context.client, option_name);
-		if (!config.TryGetExtensionOption(option_name, extension_option)) {
+	if (!config.TryGetExtensionOption(name, extension_option)) {
+		Catalog::AutoloadExtensionByConfigName(context.client, name);
+		if (!config.TryGetExtensionOption(name, extension_option)) {
 			throw InvalidInputException("Extension parameter %s was not found after autoloading", name);
 		}
 	}
-	ResetExtensionVariable(context, config, option_name, extension_option,
+	ResetExtensionVariable(context, config, name, extension_option,
 	                       PhysicalSet::GetSettingScope(extension_option, scope));
-	return SourceResultType::FINISHED;
 }
 
 void PhysicalReset::ResetAll(ExecutionContext &context, SetScope scope) {

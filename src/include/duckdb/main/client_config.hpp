@@ -94,6 +94,8 @@ struct ClientConfig {
 	//! Variables set by the user
 	identifier_map_t<Value> user_variables;
 
+	identifier_map_t<Value> session_defaults;
+
 	//! Function that is used to create the result collector for a materialized result.
 	get_result_collector_t get_result_collector = nullptr;
 

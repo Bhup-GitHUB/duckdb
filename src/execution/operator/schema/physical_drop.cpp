@@ -2,6 +2,7 @@
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/execution/operator/helper/physical_reset.hpp"
 #include "duckdb/main/client_data.hpp"
+#include "duckdb/main/config.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -54,10 +55,19 @@ static void DeallocateAll(ClientContext &context) {
 	}
 }
 
+static void ResetSessionAuthorization(ExecutionContext &context) {
+	const Identifier name("session_authorization");
+	ExtensionOption option;
+	if (DBConfig::GetConfig(context.client).TryGetExtensionOption(name, option)) {
+		PhysicalReset::ResetVariable(context, name, SetScope::AUTOMATIC);
+	}
+}
+
 static void Discard(ExecutionContext &context, DiscardTarget target) {
 	switch (target) {
 	case DiscardTarget::ALL:
 		DeallocateAll(context.client);
+		ResetSessionAuthorization(context);
 		PhysicalReset::ResetAll(context, SetScope::AUTOMATIC);
 		DropTemporaryObjects(context.client);
 		ResetSequences(context.client);

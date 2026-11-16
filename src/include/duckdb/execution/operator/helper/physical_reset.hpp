@@ -40,6 +40,7 @@ public:
 	}
 
 	static void ResetAll(ExecutionContext &context, SetScope scope);
+	static void ResetVariable(ExecutionContext &context, const Identifier &name, SetScope scope);
 
 public:
 	const String name;

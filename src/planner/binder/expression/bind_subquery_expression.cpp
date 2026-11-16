@@ -1,4 +1,8 @@
+#include "duckdb/parser/expression/cast_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/expression/parameter_expression.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
+#include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
@@ -59,9 +63,49 @@ static void ExtractSubqueryChildren(unique_ptr<Expression> &child, vector<unique
 	}
 }
 
+static optional_ptr<unique_ptr<ParsedExpression>> UnnestedParameter(SubqueryExpression &expr) {
+	if (expr.GetSubqueryType() != SubqueryType::ANY || !expr.GetChild()) {
+		return nullptr;
+	}
+	auto &node = *expr.SubqueryMutable()->node;
+	if (node.type != QueryNodeType::SELECT_NODE) {
+		return nullptr;
+	}
+	auto &select = node.Cast<SelectNode>();
+	if (select.select_list.size() != 1 || select.select_list[0]->GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return nullptr;
+	}
+	auto &unnest = select.select_list[0]->Cast<FunctionExpression>();
+	if (unnest.FunctionName() != "unnest" || unnest.GetArguments().size() != 1) {
+		return nullptr;
+	}
+	auto &argument = unnest.GetArgumentsMutable()[0];
+	if (argument.HasName() || argument.GetExpression().GetExpressionClass() != ExpressionClass::PARAMETER) {
+		return nullptr;
+	}
+	return &argument.GetExpressionMutable();
+}
+
 BindResult ExpressionBinder::BindExpression(SubqueryExpression &expr, idx_t depth) {
 	if (inside_try) {
 		throw BinderException("TRY can not be used in combination with a scalar subquery");
+	}
+	unique_ptr<Expression> bound_child;
+	if (auto parameter = UnnestedParameter(expr)) {
+		auto child_result = Bind(expr.GetChildMutable(), depth);
+		if (child_result.HasError()) {
+			return child_result;
+		}
+		bound_child = std::move(child_result.expression);
+		auto element_type = LogicalType::NormalizeType(ExpressionBinder::GetExpressionReturnType(*bound_child));
+		auto parameters = binder.GetParameters();
+		if (parameters && element_type.IsValid() && !element_type.IsUnknown() &&
+		    element_type.id() != LogicalTypeId::SQLNULL) {
+			auto parameter_type = parameters->GetReturnType((*parameter)->Cast<ParameterExpression>().Identifier());
+			if (parameter_type.IsUnknown() || parameter_type.id() == LogicalTypeId::STRING_LITERAL) {
+				*parameter = make_uniq<CastExpression>(LogicalType::LIST(element_type), std::move(*parameter));
+			}
+		}
 	}
 	// bind the subquery in its own binder
 	auto subquery_binder = Binder::CreateBinder(context, binder);
@@ -83,8 +127,7 @@ BindResult ExpressionBinder::BindExpression(SubqueryExpression &expr, idx_t dept
 		}
 	}
 	// bind the child expression the subquery is compared against, if any
-	unique_ptr<Expression> bound_child;
-	if (expr.GetChild()) {
+	if (expr.GetChild() && !bound_child) {
 		auto child_result = Bind(expr.GetChildMutable(), depth);
 		if (child_result.HasError()) {
 			return child_result;

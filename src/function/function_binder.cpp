@@ -336,9 +336,91 @@ MultipleCandidateException(const Identifier &catalog_name, const Identifier &sch
 }
 
 template <class T>
+static optional_idx CheapestCandidate(optional_ptr<ClientContext> context, const FunctionSet<T> &functions,
+                                      const vector<idx_t> &candidate_functions, const vector<LogicalType> &arguments,
+                                      const vector<pair<Identifier, LogicalType>> &named_arguments) {
+	optional_idx best_function;
+	idx_t lowest_cost = NumericLimits<idx_t>::Maximum();
+	bool tied = false;
+	for (auto f_idx : candidate_functions) {
+		auto cost = FunctionOverloads::Cost(context, *functions.functions[f_idx], arguments, named_arguments);
+		if (!cost.IsValid() || cost.GetIndex() > lowest_cost) {
+			continue;
+		}
+		tied = cost.GetIndex() == lowest_cost;
+		if (!tied) {
+			lowest_cost = cost.GetIndex();
+			best_function = f_idx;
+		}
+	}
+	return tied ? optional_idx() : best_function;
+}
+
+template <class T>
+static optional_idx SelectForUnknownArguments(optional_ptr<ClientContext> context, const FunctionSet<T> &functions,
+                                              const vector<idx_t> &candidate_functions,
+                                              const vector<LogicalType> &arguments,
+                                              const vector<pair<Identifier, LogicalType>> &named_arguments) {
+	LogicalType known;
+	bool shared = true;
+	for (auto &argument : arguments) {
+		if (argument.IsUnknown()) {
+			continue;
+		}
+		auto type = LogicalType::NormalizeType(argument);
+		if (!known.IsValid()) {
+			known = std::move(type);
+		} else if (known != type) {
+			shared = false;
+		}
+	}
+	auto assumed = arguments;
+	if (known.IsValid() && shared) {
+		for (auto &argument : assumed) {
+			if (argument.IsUnknown()) {
+				argument = known;
+			}
+		}
+		auto selected = CheapestCandidate(context, functions, candidate_functions, assumed, named_arguments);
+		if (selected.IsValid()) {
+			return selected;
+		}
+		assumed = arguments;
+	}
+	for (idx_t i = 0; i < assumed.size(); i++) {
+		if (!assumed[i].IsUnknown()) {
+			continue;
+		}
+		optional_ptr<const LogicalType> expected;
+		bool agreed = true;
+		bool takes_varchar = false;
+		for (auto f_idx : candidate_functions) {
+			auto &signature = functions.functions[f_idx]->GetSignature();
+			auto &type = i < signature.GetPositionalParameterCount() ? signature.GetParameter(i).GetType()
+			                                                         : signature.GetArgs()->GetType();
+			takes_varchar |= type == LogicalType::VARCHAR;
+			if (!expected) {
+				expected = &type;
+			} else if (*expected != type) {
+				agreed = false;
+			}
+		}
+		if (takes_varchar) {
+			assumed[i] = LogicalType::VARCHAR;
+		} else if (agreed && expected && expected->id() != LogicalTypeId::ANY && !expected->IsTemplated()) {
+			assumed[i] = *expected;
+		} else {
+			return optional_idx();
+		}
+	}
+	return CheapestCandidate(context, functions, candidate_functions, assumed, named_arguments);
+}
+
+template <class T>
 optional_idx FunctionOverloads::Select(optional_ptr<ClientContext> context, const Identifier &name,
                                        const FunctionSet<T> &functions, const vector<LogicalType> &arguments,
-                                       const vector<pair<Identifier, LogicalType>> &named_arguments, ErrorData &error) {
+                                       const vector<pair<Identifier, LogicalType>> &named_arguments, ErrorData &error,
+                                       bool infer_parameters) {
 	auto candidate_functions = Candidates(context, name, functions, arguments, named_arguments, error);
 	if (candidate_functions.empty()) {
 		// No candidates, return an invalid index.
@@ -348,6 +430,13 @@ optional_idx FunctionOverloads::Select(optional_ptr<ClientContext> context, cons
 		// Multiple candidates, check if there are any unknown arguments.
 		for (auto &arg_type : arguments) {
 			if (arg_type.IsUnknown()) {
+				if (infer_parameters) {
+					auto selected =
+					    SelectForUnknownArguments(context, functions, candidate_functions, arguments, named_arguments);
+					if (selected.IsValid()) {
+						return selected;
+					}
+				}
 				// We cannot resolve the parameters to a function.
 				throw ParameterNotResolvedException();
 			}
@@ -364,8 +453,8 @@ template <class T>
 optional_idx FunctionBinder::BindFunctionFromArguments(const Identifier &name, const FunctionSet<T> &functions,
                                                        const vector<LogicalType> &arguments,
                                                        const vector<pair<Identifier, LogicalType>> &named_arguments,
-                                                       ErrorData &error) {
-	return FunctionOverloads::Select(context, name, functions, arguments, named_arguments, error);
+                                                       ErrorData &error, bool infer_parameters) {
+	return FunctionOverloads::Select(context, name, functions, arguments, named_arguments, error, infer_parameters);
 }
 
 //! Type constructors select overloads outside of FunctionBinder, as they can be bound without a ClientContext
@@ -373,7 +462,17 @@ template optional_idx FunctionOverloads::Select<TypeConstructor>(optional_ptr<Cl
                                                                  const FunctionSet<TypeConstructor> &,
                                                                  const vector<LogicalType> &,
                                                                  const vector<pair<Identifier, LogicalType>> &,
-                                                                 ErrorData &);
+                                                                 ErrorData &, bool);
+
+static bool UnknownArgumentsAreParameters(const vector<pair<Identifier, unique_ptr<Expression>>> &arguments) {
+	for (auto &argument : arguments) {
+		if (ExpressionBinder::GetExpressionReturnType(*argument.second).IsUnknown() &&
+		    argument.second->GetExpressionClass() != ExpressionClass::BOUND_PARAMETER) {
+			return false;
+		}
+	}
+	return true;
+}
 
 template <class T>
 static bool AnyOverloadSupportsImplicitArgumentNames(const FunctionSet<T> &functions) {
@@ -413,9 +512,10 @@ optional_idx FunctionBinder::BindFunctionFromArguments(const Identifier &name, c
 
 	// Does this call have a valid positional -> named argument shape?
 	const auto is_valid_call = TrySplitArgumentTypes(arguments, positional, named);
+	const auto infer_parameters = UnknownArgumentsAreParameters(arguments);
 	if (is_valid_call) {
 		// Yes. Let's try to bind
-		const auto result = BindFunctionFromArguments(name, functions, positional, named, error);
+		const auto result = BindFunctionFromArguments(name, functions, positional, named, error, infer_parameters);
 
 		// We failed binding - does any other overload support implicit argument names?
 		// If not, this is a hard failure.
@@ -439,7 +539,7 @@ optional_idx FunctionBinder::BindFunctionFromArguments(const Identifier &name, c
 
 		if (TrySplitArgumentTypes(arguments, positional, named)) {
 			ErrorData retry_error;
-			auto result = BindFunctionFromArguments(name, functions, positional, named, retry_error);
+			auto result = BindFunctionFromArguments(name, functions, positional, named, retry_error, infer_parameters);
 			if (result.IsValid() || !is_valid_call) {
 				error = std::move(retry_error);
 				return result;

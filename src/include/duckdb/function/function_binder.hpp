@@ -47,7 +47,8 @@ struct FunctionOverloads {
 	template <class T>
 	static optional_idx Select(optional_ptr<ClientContext> context, const Identifier &name,
 	                           const FunctionSet<T> &functions, const vector<LogicalType> &arguments,
-	                           const vector<pair<Identifier, LogicalType>> &named_arguments, ErrorData &error);
+	                           const vector<pair<Identifier, LogicalType>> &named_arguments, ErrorData &error,
+	                           bool infer_parameters = false);
 };
 
 //! The FunctionBinder class is responsible for binding functions
@@ -345,7 +346,7 @@ private:
 	optional_idx BindFunctionFromArguments(const Identifier &name, const FunctionSet<T> &functions,
 	                                       const vector<LogicalType> &arguments,
 	                                       const vector<pair<Identifier, LogicalType>> &named_arguments,
-	                                       ErrorData &error);
+	                                       ErrorData &error, bool infer_parameters = false);
 
 	//! Select the best matching overload for the given full (maybe-named) argument list.
 	template <class T>

@@ -9,6 +9,7 @@
 #include "duckdb/function/scalar/string_functions.hpp"
 
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression_binder.hpp"
 
 namespace duckdb {
 
@@ -386,16 +387,26 @@ unique_ptr<FunctionData> BindConcatFunctionInternal(ClientContext &context, Boun
                                                     vector<unique_ptr<Expression>> &arguments, bool is_operator) {
 	bool list_concat = false;
 	bool all_null = true;
+	bool has_unknown = false;
+	bool has_blob = false;
 	// blob concat is only supported for the concat operator - regular concat converts to varchar
 	bool all_blob = is_operator ? true : false;
 	for (auto &arg : arguments) {
 		if (arg->GetReturnType().id() == LogicalTypeId::UNKNOWN) {
-			throw ParameterNotResolvedException();
+			has_unknown = true;
+			all_null = false;
+			continue;
+		}
+		if (ExpressionBinder::GetExpressionReturnType(*arg).id() == LogicalTypeId::STRING_LITERAL) {
+			all_null = false;
+			continue;
 		}
 		if (arg->GetReturnType().id() == LogicalTypeId::LIST || arg->GetReturnType().id() == LogicalTypeId::ARRAY) {
 			list_concat = true;
 		}
-		if (arg->GetReturnType().id() != LogicalTypeId::BLOB) {
+		if (arg->GetReturnType().id() == LogicalTypeId::BLOB) {
+			has_blob = true;
+		} else {
 			all_blob = false;
 		}
 		if (arg->GetReturnType().id() != LogicalTypeId::SQLNULL) {
@@ -403,6 +414,9 @@ unique_ptr<FunctionData> BindConcatFunctionInternal(ClientContext &context, Boun
 		}
 	}
 	if (list_concat) {
+		if (has_unknown) {
+			throw ParameterNotResolvedException();
+		}
 		return BindListConcat(context, bound_function, arguments, is_operator);
 	}
 	if (all_null) {
@@ -421,7 +435,7 @@ unique_ptr<FunctionData> BindConcatFunctionInternal(ClientContext &context, Boun
 		SetArgumentType(bound_function, LogicalTypeId::VARCHAR);
 		return make_uniq<ConcatFunctionData>(bound_function.GetReturnType(), is_operator);
 	}
-	auto return_type = all_blob ? LogicalType::BLOB : LogicalType::VARCHAR;
+	auto return_type = all_blob && has_blob ? LogicalType::BLOB : LogicalType::VARCHAR;
 
 	// we can now assume that the input is a string or castable to a string
 	SetArgumentType(bound_function, return_type);

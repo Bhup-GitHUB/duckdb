@@ -1,6 +1,7 @@
 #include "duckdb/optimizer/expression_rewriter.hpp"
 
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/fault_points.hpp"
 #include "duckdb/function/builtin_function_lookup.hpp"
 #include "duckdb/function/lambda_functions.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -13,6 +14,7 @@
 #include "duckdb/optimizer/rule/invoke_inlining.hpp"
 
 #include <absl/algorithm/container.h>
+#include <absl/time/clock.h>
 
 namespace duckdb {
 
@@ -111,6 +113,10 @@ unique_ptr<Expression> ExpressionRewriter::ApplyRules(LogicalOperator &op, const
 	stack.push_back({expr, is_root, false});
 
 	while (!stack.empty()) {
+		SDB_IF_FAILURE("slow_expression_rewrite") {
+			absl::SleepFor(absl::Milliseconds(1));
+		}
+		context.InterruptCheck();
 		auto &frame = stack.back();
 		auto &current_expr = frame.expr.get();
 		D_ASSERT(current_expr);

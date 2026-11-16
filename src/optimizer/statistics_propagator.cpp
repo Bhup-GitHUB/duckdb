@@ -1,5 +1,8 @@
 #include "duckdb/optimizer/statistics_propagator.hpp"
 
+#include <absl/time/clock.h>
+
+#include "duckdb/common/fault_points.hpp"
 #include "duckdb/common/stack_depth.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/settings.hpp"
@@ -120,6 +123,10 @@ unique_ptr<NodeStatistics> StatisticsPropagator::PropagateStatistics(unique_ptr<
 	path.push_back(node_ptr);
 	auto result = PropagateStatistics(*node_ptr, node_ptr);
 	path.pop_back();
+	SDB_IF_FAILURE("slow_statistics_propagation") {
+		absl::SleepFor(absl::Milliseconds(10));
+	}
+	context.InterruptCheck();
 	return result;
 }
 

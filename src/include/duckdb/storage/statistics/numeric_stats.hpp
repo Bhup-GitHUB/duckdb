@@ -77,7 +77,6 @@ struct NumericStats {
 	DUCKDB_API static FilterPropagateResult CheckZonemap(const BaseStatistics &stats, ExpressionType comparison_type,
 	                                                     array_ptr<const Value> constants);
 
-	//! The verdict of `x <comparison> constant` over the non-NULL values of [min, max]
 	template <class T>
 	static FilterPropagateResult CheckRange(ExpressionType comparison, T min, T max, T constant) {
 		switch (comparison) {

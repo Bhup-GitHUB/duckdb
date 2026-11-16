@@ -55,8 +55,6 @@ bool DynamicFilterFunctionData::Equals(const FunctionData &other_p) const {
 
 struct DynamicFilterLocalState : public FunctionLocalState {
 	idx_t version = 0;
-	//! The bound as a constant vector of the input's type; none while there is no bound or its type differs, and then
-	//! every row passes: the filter only prunes
 	unique_ptr<Vector> constant;
 };
 

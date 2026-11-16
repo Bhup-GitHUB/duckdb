@@ -33,8 +33,6 @@ public:
 	//! Compile the statistics check of a filter expression; never fails. The expression must
 	//! outlive the checker (fallback nodes reference their subtrees).
 	static unique_ptr<ZonemapChecker> Compile(const Expression &expr);
-	//! The check of `column <comparison> constant` for a column of the constant's type, the constant not NULL. The
-	//! constant must outlive the checker.
 	static unique_ptr<ZonemapChecker> CompileComparison(ExpressionType comparison, const Value &constant);
 
 	//! Verdict against the given statistics. `context` is only consulted by fallback nodes

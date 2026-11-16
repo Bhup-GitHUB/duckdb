@@ -241,8 +241,6 @@ private:
 	string_t upper;
 };
 
-//! Truncating a string to the length of a statistics bound keeps its order, so the constants a bound could equal
-//! form one run of the sorted list: only that run is checked.
 class StringInZonemapChecker final : public ZonemapChecker {
 public:
 	explicit StringInZonemapChecker(const vector<const Value *> &values) {
@@ -460,8 +458,8 @@ private:
 	mutable vector<optional_ptr<const BaseStatistics>> child_stats;
 };
 
-//! Root dynamic filter: reads the shared bound the TOP_N operator tightens while the scan runs, compiled into the
-//! static comparison checker of each new bound.
+//! Root dynamic filter: reads the shared bound the TOP_N operator tightens while the scan runs
+//! (mirrors DynamicFilterScalarFun::FilterPrune).
 class DynamicZonemapChecker final : public ZonemapChecker {
 public:
 	DynamicZonemapChecker(shared_ptr<DynamicFilterData> filter_data_p, LogicalType column_type_p)

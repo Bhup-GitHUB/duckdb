@@ -71,11 +71,22 @@ bool TopN::CanOptimize(LogicalOperator &op, optional_ptr<ClientContext> context)
 }
 
 void TopN::PushdownDynamicFilters(LogicalTopN &op) {
+	// pushdown dynamic filters through the Top-N operator
+	bool nulls_first = op.orders[0].null_order == OrderByNullType::NULLS_FIRST;
+	auto &type = op.orders[0].expression->GetReturnType();
+	if (!TypeIsNumeric(type.InternalType()) && type.id() != LogicalTypeId::VARCHAR) {
+		// only supported for numeric and varchar types
+		return;
+	}
+	if (op.orders[0].expression->GetExpressionType() != ExpressionType::BOUND_COLUMN_REF) {
+		// we can only pushdown on ORDER BY [col] currently
+		return;
+	}
 	if (op.dynamic_filter) {
 		// dynamic filter is already set
 		return;
 	}
-	// pushdown dynamic filters through the Top-N operator
+	auto &colref = op.orders[0].expression->Cast<BoundColumnRefExpression>();
 	ExpressionType comparison_type;
 	if (op.orders[0].type == OrderType::ASCENDING) {
 		// for ascending order, we want the lowest N elements, so we filter on C <= [boundary]
@@ -88,8 +99,9 @@ void TopN::PushdownDynamicFilters(LogicalTopN &op) {
 		comparison_type =
 		    op.orders.size() == 1 ? ExpressionType::COMPARE_GREATERTHAN : ExpressionType::COMPARE_GREATERTHANOREQUALTO;
 	}
-	op.dynamic_filter = PushdownDynamicFilter(*op.children[0], *op.orders[0].expression, comparison_type,
-	                                          op.orders[0].null_order == OrderByNullType::NULLS_FIRST);
+	// put the filter into the Top-N clause
+	op.dynamic_filter =
+	    PushDynamicFilterIntoScans(context, *op.children[0], colref.Binding(), type, nulls_first, comparison_type);
 }
 
 static optional_ptr<LogicalAggregate> GroupLimitAggregate(LogicalOperator &op,
@@ -122,6 +134,17 @@ static BoundColumnRefExpression GroupReference(const LogicalAggregate &aggregate
 	                                ColumnBinding(aggregate.group_index, ProjectionIndex(group)));
 }
 
+static shared_ptr<DynamicFilterData> PushGroupFilter(ClientContext &context, LogicalAggregate &aggregate, idx_t group,
+                                                     ExpressionType comparison_type, bool nulls_first) {
+	auto &type = aggregate.groups[group]->GetReturnType();
+	if (!TypeIsNumeric(type.InternalType()) && type.id() != LogicalTypeId::VARCHAR) {
+		return nullptr;
+	}
+	return TopN::PushDynamicFilterIntoScans(context, aggregate,
+	                                        ColumnBinding(aggregate.group_index, ProjectionIndex(group)), type,
+	                                        nulls_first, comparison_type);
+}
+
 void TopN::PushdownGroupLimitFilter(LogicalLimit &limit) {
 	if (limit.limit_val.Type() != LimitNodeType::CONSTANT_VALUE ||
 	    (limit.offset_val.Type() != LimitNodeType::CONSTANT_VALUE && limit.offset_val.Type() != LimitNodeType::UNSET)) {
@@ -142,7 +165,7 @@ void TopN::PushdownGroupLimitFilter(LogicalLimit &limit) {
 	const auto key = GroupReference(*aggregate, 0);
 	const auto end = RowGroupPruner::GroupLimitEnd(context, *aggregate, key);
 	group_limit.order = {OrderModifiers(end, OrderByNullType::NULLS_LAST)};
-	group_limit.filter = PushdownDynamicFilter(*aggregate, key, BoundComparison(end), false);
+	group_limit.filter = PushGroupFilter(context, *aggregate, 0, BoundComparison(end), false);
 	if (group_limit.filter) {
 		RowGroupPruner::OrderScan(context, *aggregate, key, end, OrderByNullType::NULLS_LAST);
 	}
@@ -186,29 +209,19 @@ bool TopN::PushdownGroupOrderBound(LogicalTopN &op) {
 	}
 	auto &group_limit = aggregate->group_limit;
 	group_limit.limit = total;
-	group_limit.filter =
-	    PushdownDynamicFilter(*aggregate, GroupReference(*aggregate, columns[0]), BoundComparison(order[0].order_type),
-	                          order[0].null_type == OrderByNullType::NULLS_FIRST);
+	group_limit.filter = PushGroupFilter(context, *aggregate, columns[0], BoundComparison(order[0].order_type),
+	                                     order[0].null_type == OrderByNullType::NULLS_FIRST);
 	group_limit.columns = std::move(columns);
 	group_limit.order = std::move(order);
 	return true;
 }
 
-shared_ptr<DynamicFilterData> TopN::PushdownDynamicFilter(LogicalOperator &child, const Expression &expr,
-                                                          ExpressionType comparison_type, bool nulls_first) {
-	auto &type = expr.GetReturnType();
-	if (!TypeIsNumeric(type.InternalType()) && type.id() != LogicalTypeId::VARCHAR) {
-		// only supported for numeric and varchar types
-		return nullptr;
-	}
-	if (expr.GetExpressionType() != ExpressionType::BOUND_COLUMN_REF) {
-		// we can only pushdown on ORDER BY [col] currently
-		return nullptr;
-	}
-	auto &colref = expr.Cast<BoundColumnRefExpression>();
+shared_ptr<DynamicFilterData> TopN::PushDynamicFilterIntoScans(ClientContext &context, LogicalOperator &child,
+                                                               ColumnBinding binding, const LogicalType &type,
+                                                               bool nulls_first, ExpressionType comparison_type) {
 	vector<JoinFilterPushdownColumn> columns;
 	JoinFilterPushdownColumn column;
-	column.probe_column_index = colref.Binding();
+	column.probe_column_index = binding;
 	columns.emplace_back(column);
 	vector<PushdownFilterTarget> pushdown_targets;
 	JoinFilterPushdownOptimizer::GetPushdownFilterTargets(child, std::move(columns), pushdown_targets);

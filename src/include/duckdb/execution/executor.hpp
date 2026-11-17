@@ -86,6 +86,9 @@ public:
 	//! Throw the exception that was pushed using PushError.
 	//! Should only be called if HasError returns true
 	void ThrowException();
+	bool IsCancelled() const {
+		return cancelled;
+	}
 
 	//! Work on tasks for this specific executor, until there are no tasks remaining
 	bool WorkOnTasks();
@@ -223,7 +226,7 @@ private:
 	//! The total amount of pipelines in the query
 	idx_t total_pipelines;
 	//! Whether or not execution is cancelled
-	bool cancelled;
+	atomic<bool> cancelled;
 
 	//! The last pending execution result (if any)
 	QueryResultState execution_result;

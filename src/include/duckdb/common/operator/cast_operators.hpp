@@ -26,6 +26,7 @@
 #include "duckdb/common/string_util.hpp"
 
 #include <absl/strings/ascii.h>
+#include <absl/strings/match.h>
 
 namespace duckdb {
 struct CastParameters;
@@ -507,7 +508,44 @@ DUCKDB_API bool TryCast::Operation(double input, double &result, bool strict);
 //===--------------------------------------------------------------------===//
 // String -> Numeric Casts
 //===--------------------------------------------------------------------===//
+static inline bool TryCastStringBoolPrefix(std::string_view value, std::string_view word, idx_t min_size) {
+	return value.size() >= min_size && value.size() <= word.size() &&
+	       absl::EqualsIgnoreCase(value, word.substr(0, value.size()));
+}
+
 static inline bool TryCastStringBool(const char *input_data, idx_t input_size, bool &result, bool strict) {
+	if (!strict) {
+		while (input_size > 0 && StringUtil::CharacterIsSpace(*input_data)) {
+			input_data++;
+			input_size--;
+		}
+		while (input_size > 0 && StringUtil::CharacterIsSpace(input_data[input_size - 1])) {
+			input_size--;
+		}
+		if (input_size == 0) {
+			return false;
+		}
+		const std::string_view value(input_data, input_size);
+		switch (absl::ascii_tolower(static_cast<unsigned char>(input_data[0]))) {
+		case 't':
+		case 'y':
+			result = true;
+			return TryCastStringBoolPrefix(value, value[0] == 't' || value[0] == 'T' ? "true" : "yes", 1);
+		case 'f':
+		case 'n':
+			result = false;
+			return TryCastStringBoolPrefix(value, value[0] == 'f' || value[0] == 'F' ? "false" : "no", 1);
+		case 'o':
+			result = TryCastStringBoolPrefix(value, "on", 2);
+			return result || TryCastStringBoolPrefix(value, "off", 2);
+		case '1':
+		case '0':
+			result = input_data[0] == '1';
+			return input_size == 1;
+		default:
+			return false;
+		}
+	}
 	switch (input_size) {
 	case 1: {
 		unsigned char c = absl::ascii_tolower(static_cast<unsigned char>(*input_data));

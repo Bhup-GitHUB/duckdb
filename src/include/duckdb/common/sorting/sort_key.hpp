@@ -227,7 +227,7 @@ public:
 	}
 
 	friend bool operator==(const SORT_KEY &lhs, const SORT_KEY &rhs) {
-		return (lhs <=> rhs) == 0;
+		return memcmp(&lhs.part0, &rhs.part0, SORT_KEY::PARTS * sizeof(uint64_t)) == 0;
 	}
 
 	friend std::strong_ordering operator<=>(const SORT_KEY &lhs, const SORT_KEY &rhs) {

@@ -1,12 +1,185 @@
 #include "duckdb/execution/operator/aggregate/group_limit_bound.hpp"
 
+#include "duckdb/common/sorting/sort_key.hpp"
 #include "duckdb/common/vector/vector_iterator.hpp"
+#include "pdqsort.h"
 
 #include <absl/algorithm/container.h>
 
 #include <algorithm>
 
 namespace duckdb {
+
+namespace {
+
+idx_t KeyWidth(const vector<LogicalType> &types) {
+	idx_t width = 0;
+	for (auto &type : types) {
+		const auto physical = type.InternalType();
+		if (!TypeIsConstantSize(physical)) {
+			return DConstants::INVALID_INDEX;
+		}
+		width += 1 + GetTypeIdSize(physical);
+	}
+	return width;
+}
+
+template <class KEY>
+bool KeepSmallest(vector<KEY> &keys, idx_t limit, bool may_repeat) {
+	while (true) {
+		if (keys.size() < limit) {
+			if (may_repeat) {
+				duckdb_pdqsort::pdqsort_branchless(keys.begin(), keys.end());
+				keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+			}
+			return false;
+		}
+		const auto end = keys.begin() + NumericCast<int64_t>(limit);
+		duckdb_pdqsort::nth_element_branchless(keys.begin(), end - 1, keys.end());
+		if (!may_repeat) {
+			break;
+		}
+		duckdb_pdqsort::pdqsort_branchless(keys.begin(), end);
+		const auto distinct_end = std::unique(keys.begin(), end);
+		if (distinct_end == end) {
+			break;
+		}
+		keys.erase(distinct_end, end);
+	}
+	keys.resize(limit);
+	return true;
+}
+
+template <class SORT_KEY>
+class FixedGroupBoundKeys final : public GroupBoundKeys {
+public:
+	FixedGroupBoundKeys(idx_t limit, idx_t width_p)
+	    : GroupBoundKeys(limit), width(width_p),
+	      encoded(make_unsafe_uniq_array_uninitialized<SORT_KEY>(STANDARD_VECTOR_SIZE)),
+	      targets(make_unsafe_uniq_array_uninitialized<data_ptr_t>(STANDARD_VECTOR_SIZE)) {
+	}
+
+	bool Add(DataChunk &groups, const vector<OrderModifiers> &order) override {
+		const auto count = groups.size();
+		for (idx_t i = 0; i < count; i++) {
+			encoded[i] = SORT_KEY();
+			targets[i] = data_ptr_cast(&encoded[i].part0);
+		}
+		CreateSortKeyHelpers::CreateSortKey(groups, order, targets.get(), offsets);
+		bool compacted = false;
+		for (idx_t i = 0; i < count; i++) {
+			encoded[i].ByteSwap();
+			if (full && !(encoded[i] < limit_key)) {
+				continue;
+			}
+			keys.push_back(encoded[i]);
+			if (keys.size() >= next_compaction) {
+				Compact();
+				compacted = true;
+			}
+		}
+		return compacted && full;
+	}
+
+	string_t LimitKey() override {
+		Store(limit_key, limit_bytes);
+		return string_t(const_char_ptr_cast(limit_bytes), UnsafeNumericCast<uint32_t>(width));
+	}
+
+	void AppendKeys(string &bytes, vector<idx_t> &ends) override {
+		data_t key_bytes[SORT_KEY::INLINE_LENGTH];
+		for (idx_t i = 0; i < limit; i++) {
+			Store(keys[i], key_bytes);
+			bytes.append(const_char_ptr_cast(key_bytes), width);
+			ends.push_back(bytes.size());
+		}
+	}
+
+private:
+	static void Store(const SORT_KEY &key, data_ptr_t target) {
+		for (idx_t i = 0; i < SORT_KEY::PARTS; i++) {
+			duckdb::Store<uint64_t>(BSwapIfLE((&key.part0)[i]), target + i * sizeof(uint64_t));
+		}
+	}
+
+	void Compact() {
+		if (KeepSmallest(keys, limit, may_repeat)) {
+			full = true;
+			limit_key = keys.back();
+		}
+		next_compaction = 2 * MaxValue(limit, keys.size());
+	}
+
+	idx_t width;
+	unsafe_unique_array<SORT_KEY> encoded;
+	unsafe_unique_array<data_ptr_t> targets;
+	unsafe_vector<idx_t> offsets;
+	vector<SORT_KEY> keys;
+	SORT_KEY limit_key;
+	data_t limit_bytes[SORT_KEY::INLINE_LENGTH];
+};
+
+class StringGroupBoundKeys final : public GroupBoundKeys {
+public:
+	StringGroupBoundKeys(idx_t limit, Allocator &allocator_p)
+	    : GroupBoundKeys(limit), allocator(allocator_p), encoded_cache(allocator, LogicalType::BLOB),
+	      encoded(encoded_cache), heap(allocator) {
+	}
+
+	bool Add(DataChunk &groups, const vector<OrderModifiers> &order) override {
+		encoded.ResetFromCache(encoded_cache);
+		CreateSortKeyHelpers::CreateSortKey(groups, order, encoded);
+		bool compacted = false;
+		for (auto entry : encoded.Values<string_t>()) {
+			const auto key = entry.GetValueUnsafe();
+			if (full && !(key < limit_key)) {
+				continue;
+			}
+			keys.push_back(heap.AddBlob(key));
+			if (keys.size() >= next_compaction) {
+				Compact();
+				compacted = true;
+			}
+		}
+		return compacted && full;
+	}
+
+	string_t LimitKey() override {
+		return limit_key;
+	}
+
+	void AppendKeys(string &bytes, vector<idx_t> &ends) override {
+		for (idx_t i = 0; i < limit; i++) {
+			bytes.append(keys[i].GetData(), keys[i].GetSize());
+			ends.push_back(bytes.size());
+		}
+	}
+
+private:
+	void Compact() {
+		const auto kept_limit = KeepSmallest(keys, limit, may_repeat);
+		StringHeap kept(allocator);
+		for (auto &key : keys) {
+			key = kept.AddBlob(key);
+		}
+		heap.Destroy();
+		heap.Move(kept);
+		if (kept_limit) {
+			full = true;
+			limit_key = keys.back();
+		}
+		next_compaction = 2 * MaxValue(limit, keys.size());
+	}
+
+	Allocator &allocator;
+	VectorCache encoded_cache;
+	Vector encoded;
+	StringHeap heap;
+	vector<string_t> keys;
+	string_t limit_key;
+};
+
+} // namespace
 
 static vector<column_t> BoundColumns(idx_t group_count, const GroupLimit &group_limit) {
 	vector<column_t> result(group_limit.columns.begin(), group_limit.columns.end());
@@ -33,6 +206,23 @@ GroupLimitBound::GroupLimitBound(const vector<LogicalType> &group_types, const G
 	for (auto column : columns) {
 		types.push_back(group_types[column]);
 	}
+	key_width = KeyWidth(types);
+}
+
+unique_ptr<GroupBoundKeys> GroupLimitBound::CreateKeys(Allocator &allocator) const {
+	if (key_width <= 8) {
+		return make_uniq<FixedGroupBoundKeys<SortKey<SortKeyType::NO_PAYLOAD_FIXED_8>>>(limit, key_width);
+	}
+	if (key_width <= 16) {
+		return make_uniq<FixedGroupBoundKeys<SortKey<SortKeyType::NO_PAYLOAD_FIXED_16>>>(limit, key_width);
+	}
+	if (key_width <= 24) {
+		return make_uniq<FixedGroupBoundKeys<SortKey<SortKeyType::NO_PAYLOAD_FIXED_24>>>(limit, key_width);
+	}
+	if (key_width <= 32) {
+		return make_uniq<FixedGroupBoundKeys<SortKey<SortKeyType::NO_PAYLOAD_FIXED_32>>>(limit, key_width);
+	}
+	return make_uniq<StringGroupBoundKeys>(limit, allocator);
 }
 
 unique_ptr<GroupLimitBound> GroupLimitBound::TryCreate(const vector<LogicalType> &group_types,
@@ -44,17 +234,18 @@ unique_ptr<GroupLimitBound> GroupLimitBound::TryCreate(const vector<LogicalType>
 	return make_uniq<GroupLimitBound>(group_types, group_limit);
 }
 
-void GroupLimitBound::Publish(const vector<string_t> &candidates, string_t limit_key) {
+void GroupLimitBound::Publish(GroupBoundKeys &keys) {
+	if (ordered) {
+		boundary.Update(keys.LimitKey());
+		return;
+	}
 	const annotated_lock_guard<annotated_mutex> guard {lock};
-	if (frozen || !boundary.Update(limit_key)) {
+	if (frozen || !boundary.Update(keys.LimitKey())) {
 		return;
 	}
 	key_bytes.clear();
 	key_ends.clear();
-	for (idx_t i = 0; i < limit; i++) {
-		key_bytes.append(candidates[i].GetData(), candidates[i].GetSize());
-		key_ends.push_back(key_bytes.size());
-	}
+	keys.AppendKeys(key_bytes, key_ends);
 }
 
 bool GroupLimitBound::Freeze(vector<string_t> &result) {
@@ -81,8 +272,8 @@ void GroupLimitBound::Reset() {
 }
 
 GroupLimitBoundSink::GroupLimitBoundSink(Allocator &allocator, const GroupLimitBound &bound)
-    : allocator(allocator), filter(allocator, bound.Types(), bound.Order()), candidate_sel(STANDARD_VECTOR_SIZE),
-      keys_cache(allocator, LogicalType::BLOB), keys(keys_cache), candidate_heap(allocator) {
+    : filter(allocator, bound.Types(), bound.Order()), candidate_sel(STANDARD_VECTOR_SIZE),
+      keys(bound.CreateKeys(allocator)) {
 	ordered.InitializeEmpty(bound.Types());
 	candidate_groups.InitializeEmpty(bound.Types());
 }
@@ -96,7 +287,40 @@ idx_t GroupLimitBoundSink::Select(GroupLimitBound &bound, DataChunk &groups, Sel
 	return filter.Admit(ordered, sel);
 }
 
-void GroupLimitBoundSink::AddCandidates(GroupLimitBound &bound, DataChunk &groups) {
+void GroupLimitBoundSink::AddNewGroups(GroupLimitBound &bound, GroupedAggregateHashTable &ht, idx_t new_groups,
+                                       const vector<LogicalType> &group_types, bool abandoned) {
+	if (created_groups >= bound.Limit()) {
+		if (ht.Count() < table_groups + new_groups) {
+			keys->MayRepeat();
+		}
+		table_groups = ht.Count();
+		if (new_group_chunk.ColumnCount() == 0) {
+			new_group_chunk.InitializeEmpty(group_types);
+		}
+		ht.SliceNewGroups(new_group_chunk, new_groups);
+		Add(bound, new_group_chunk);
+		return;
+	}
+	created_groups += new_groups;
+	if (created_groups < bound.Limit()) {
+		return;
+	}
+	if (abandoned) {
+		keys->MayRepeat();
+	}
+	AggregateHTScanState scan_state;
+	ht.InitializeScan(scan_state);
+	DataChunk groups;
+	groups.Initialize(Allocator::DefaultAllocator(), group_types);
+	while (ht.ScanGroups(scan_state, groups)) {
+		if (groups.size() != 0) {
+			Add(bound, groups);
+		}
+	}
+	table_groups = ht.Count();
+}
+
+void GroupLimitBoundSink::Add(GroupLimitBound &bound, DataChunk &groups) {
 	ordered.ReferenceColumns(groups, bound.Columns());
 	if (filtered) {
 		idx_t before;
@@ -108,45 +332,8 @@ void GroupLimitBoundSink::AddCandidates(GroupLimitBound &bound, DataChunk &group
 	} else {
 		candidate_groups.Reference(ordered);
 	}
-	const auto limit = bound.Limit();
-	keys.ResetFromCache(keys_cache);
-	CreateSortKeyHelpers::CreateSortKey(candidate_groups, bound.Order(), keys);
-	bool compacted = false;
-	for (auto entry : keys.Values<string_t>()) {
-		const auto key = entry.GetValueUnsafe();
-		if (full && !(key < limit_key)) {
-			continue;
-		}
-		candidates.push_back(candidate_heap.AddBlob(key));
-		if (candidates.size() >= 2 * limit) {
-			Compact(limit);
-			compacted = true;
-		}
-	}
-	if (!full && candidates.size() >= limit) {
-		Compact(limit);
-		compacted = true;
-	}
-	if (compacted && full) {
-		bound.Publish(candidates, limit_key);
-	}
-}
-
-void GroupLimitBoundSink::Compact(idx_t limit) {
-	absl::c_sort(candidates);
-	candidates.erase(std::ranges::unique(candidates).begin(), candidates.end());
-	if (candidates.size() >= limit) {
-		candidates.resize(limit);
-		full = true;
-	}
-	StringHeap kept(allocator);
-	for (auto &candidate : candidates) {
-		candidate = kept.AddBlob(candidate);
-	}
-	candidate_heap.Destroy();
-	candidate_heap.Move(kept);
-	if (full) {
-		limit_key = candidates.back();
+	if (keys->Add(candidate_groups, bound.Order())) {
+		bound.Publish(*keys);
 	}
 }
 

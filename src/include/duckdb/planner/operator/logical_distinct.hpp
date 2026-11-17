@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/planner/group_limit.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/planner/bound_result_modifier.hpp"
 
@@ -31,6 +32,7 @@ public:
 	vector<unique_ptr<Expression>> distinct_targets;
 	//! The order by modifier (optional, only for distinct on)
 	unique_ptr<BoundOrderModifier> order_by;
+	GroupLimit group_limit;
 
 public:
 	InsertionOrderPreservingMap<string> ParamsToString() const override;

@@ -5,6 +5,7 @@
 #include "duckdb/execution/operator/aggregate/grouped_aggregate_data.hpp"
 #include "duckdb/optimizer/row_group_pruner.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
+#include "duckdb/planner/operator/logical_distinct.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_limit.hpp"
 #include "duckdb/planner/operator/logical_order.hpp"
@@ -134,15 +135,19 @@ static BoundColumnRefExpression GroupReference(const LogicalAggregate &aggregate
 	                                ColumnBinding(aggregate.group_index, ProjectionIndex(group)));
 }
 
-static shared_ptr<DynamicFilterData> PushGroupFilter(ClientContext &context, LogicalAggregate &aggregate, idx_t group,
-                                                     ExpressionType comparison_type, bool nulls_first) {
-	auto &type = aggregate.groups[group]->GetReturnType();
+static shared_ptr<DynamicFilterData> PushGroupFilter(ClientContext &context, LogicalOperator &op, ColumnBinding binding,
+                                                     const LogicalType &type, ExpressionType comparison_type,
+                                                     bool nulls_first) {
 	if (!TypeIsNumeric(type.InternalType()) && type.id() != LogicalTypeId::VARCHAR) {
 		return nullptr;
 	}
-	return TopN::PushDynamicFilterIntoScans(context, aggregate,
-	                                        ColumnBinding(aggregate.group_index, ProjectionIndex(group)), type,
-	                                        nulls_first, comparison_type);
+	return TopN::PushDynamicFilterIntoScans(context, op, binding, type, nulls_first, comparison_type);
+}
+
+static shared_ptr<DynamicFilterData> PushGroupFilter(ClientContext &context, LogicalAggregate &aggregate, idx_t group,
+                                                     ExpressionType comparison_type, bool nulls_first) {
+	return PushGroupFilter(context, aggregate, ColumnBinding(aggregate.group_index, ProjectionIndex(group)),
+	                       aggregate.groups[group]->GetReturnType(), comparison_type, nulls_first);
 }
 
 void TopN::PushdownGroupLimitFilter(LogicalLimit &limit) {
@@ -157,7 +162,7 @@ void TopN::PushdownGroupLimitFilter(LogicalLimit &limit) {
 	}
 	optional_ptr<LogicalProjection> projection;
 	auto aggregate = GroupLimitAggregate(limit, projection);
-	if (total == 0 || total > STANDARD_VECTOR_SIZE || !aggregate) {
+	if (total == 0 || !aggregate || aggregate->expressions.empty()) {
 		return;
 	}
 	auto &group_limit = aggregate->group_limit;
@@ -171,15 +176,55 @@ void TopN::PushdownGroupLimitFilter(LogicalLimit &limit) {
 	}
 }
 
+bool TopN::PushdownDistinctOrderBound(LogicalTopN &op, idx_t total) {
+	if (op.children[0]->type != LogicalOperatorType::LOGICAL_DISTINCT) {
+		return false;
+	}
+	auto &distinct = op.children[0]->Cast<LogicalDistinct>();
+	if (distinct.distinct_type != DistinctType::DISTINCT || distinct.order_by || distinct.group_limit.limit.IsValid()) {
+		return false;
+	}
+	auto &targets = distinct.distinct_targets;
+	vector<idx_t> columns;
+	vector<OrderModifiers> order;
+	for (auto &node : op.orders) {
+		if (node.expression->GetExpressionType() != ExpressionType::BOUND_COLUMN_REF) {
+			return false;
+		}
+		const auto binding = node.expression->Cast<BoundColumnRefExpression>().Binding();
+		const auto target = std::find_if(targets.begin(), targets.end(), [&](const unique_ptr<Expression> &expr) {
+			return expr->GetExpressionType() == ExpressionType::BOUND_COLUMN_REF &&
+			       expr->Cast<BoundColumnRefExpression>().Binding() == binding;
+		});
+		if (target == targets.end()) {
+			return false;
+		}
+		const auto column = NumericCast<idx_t>(target - targets.begin());
+		if (std::find(columns.begin(), columns.end(), column) == columns.end()) {
+			columns.push_back(column);
+			order.emplace_back(node.type, node.null_order);
+		}
+	}
+	auto &key = *targets[columns[0]];
+	auto &group_limit = distinct.group_limit;
+	group_limit.limit = total;
+	group_limit.filter =
+	    PushGroupFilter(context, distinct, key.Cast<BoundColumnRefExpression>().Binding(), key.GetReturnType(),
+	                    BoundComparison(order[0].order_type), order[0].null_type == OrderByNullType::NULLS_FIRST);
+	group_limit.columns = std::move(columns);
+	group_limit.order = std::move(order);
+	return true;
+}
+
 bool TopN::PushdownGroupOrderBound(LogicalTopN &op) {
 	idx_t total;
-	if (!TryAddOperator::Operation(op.limit, op.offset, total) || total == 0 || total > STANDARD_VECTOR_SIZE) {
+	if (!TryAddOperator::Operation(op.limit, op.offset, total) || total == 0) {
 		return false;
 	}
 	optional_ptr<LogicalProjection> projection;
 	auto aggregate = GroupLimitAggregate(op, projection);
 	if (!aggregate) {
-		return false;
+		return PushdownDistinctOrderBound(op, total);
 	}
 	vector<idx_t> columns;
 	vector<OrderModifiers> order;

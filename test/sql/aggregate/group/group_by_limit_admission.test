@@ -102,6 +102,11 @@ SELECT count(*), bool_and(c = (SELECT count(*) FROM d WHERE d.k IS NOT DISTINCT 
 2048	true
 
 query II
+SELECT count(*), bool_and(c = (SELECT count(*) FROM d WHERE d.k IS NOT DISTINCT FROM r.k)) FROM (SELECT k, count(*) AS c FROM d GROUP BY k LIMIT 5000) r
+----
+5000	true
+
+query II
 SELECT g, count(*) FROM t GROUP BY g ORDER BY g DESC LIMIT 3
 ----
 999000006993	2000

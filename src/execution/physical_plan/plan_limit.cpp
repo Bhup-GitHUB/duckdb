@@ -98,7 +98,7 @@ static void TrySetGroupLimit(PhysicalOperator &plan, idx_t limit) {
 	if (child->type == PhysicalOperatorType::PROJECTION && child->children.size() == 1) {
 		child = &child->children[0].get();
 	}
-	if (child->type != PhysicalOperatorType::HASH_GROUP_BY || limit > STANDARD_VECTOR_SIZE) {
+	if (child->type != PhysicalOperatorType::HASH_GROUP_BY) {
 		return;
 	}
 	auto &hash_aggregate = child->Cast<PhysicalHashAggregate>();
@@ -173,10 +173,13 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalLimit &op) {
 	}
 	// Unpartitioned hash tables become expensive to Combine at large sizes
 	static constexpr idx_t LIMITED_DISTINCT_THRESHOLD = 100000;
-	if (total_limit.IsValid() && total_limit.GetIndex() <= LIMITED_DISTINCT_THRESHOLD) {
+	if (total_limit.IsValid()) {
 		// Create the child plan first, then rewrite safe DISTINCT/GROUP BY hash aggregates into LIMITED_DISTINCT.
 		// The LIMIT node still stays on top to enforce the actual LIMIT/OFFSET semantics.
-		if (auto *limited_plan = TryCreateLimitedDistinct(*this, plan, total_limit.GetIndex())) {
+		auto *limited_plan = total_limit.GetIndex() <= LIMITED_DISTINCT_THRESHOLD
+		                         ? TryCreateLimitedDistinct(*this, plan, total_limit.GetIndex())
+		                         : nullptr;
+		if (limited_plan) {
 			limit_child = limited_plan;
 		} else {
 			TrySetGroupLimit(plan, total_limit.GetIndex());

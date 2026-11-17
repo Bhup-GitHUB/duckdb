@@ -89,6 +89,7 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalDistinct &op) {
 	// we add a physical hash aggregation in the plan to select the distinct groups
 	auto &group_by = Make<PhysicalHashAggregate>(context, aggregate_types, std::move(aggregates), std::move(groups),
 	                                             child.get().estimated_cardinality);
+	group_by.Cast<PhysicalHashAggregate>().grouped_aggregate_data.group_limit = std::move(op.group_limit);
 	group_by.children.push_back(child);
 	if (!requires_projection) {
 		return group_by;

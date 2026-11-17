@@ -38,6 +38,7 @@ private:
 	void PushdownDynamicFilters(LogicalTopN &op);
 	void PushdownGroupLimitFilter(LogicalLimit &limit);
 	bool PushdownGroupOrderBound(LogicalTopN &op);
+	bool PushdownDistinctOrderBound(LogicalTopN &op, idx_t total);
 
 private:
 	ClientContext &context;

@@ -13,7 +13,7 @@ const vector<vector<ProjectionIndex>> &GroupedAggregateData::GetGroupingFunction
 bool GroupedAggregateData::CanLimitGroups(const vector<unique_ptr<Expression>> &groups,
                                           const vector<unique_ptr<Expression>> &aggregates,
                                           const vector<GroupingSet> &grouping_sets, bool has_grouping_functions) {
-	if (groups.empty() || aggregates.empty() || grouping_sets.size() != 1 || has_grouping_functions) {
+	if (groups.empty() || grouping_sets.size() != 1 || has_grouping_functions) {
 		return false;
 	}
 	for (auto &aggregate : aggregates) {

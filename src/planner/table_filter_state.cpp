@@ -14,6 +14,8 @@
 #include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/planner/filter/zonemap_checker.hpp"
 
+#include <bit>
+
 namespace duckdb {
 
 static unique_ptr<ExpressionFilterExecutor> TryCreateFastExecutor(const Expression &expression,
@@ -224,12 +226,20 @@ private:
 		const auto predicate = constant.GetValueUnsafe<T>();
 		for (idx_t first = 0; first < count; first += 64) {
 			const auto rows = MinValue<idx_t>(64, count - first);
+			const auto in_rows = rows == 64 ? ~uint64_t(0) : (uint64_t(1) << rows) - 1;
+			const auto valid = validity ? validity[first / 64] & in_rows : in_rows;
 			uint64_t bits = 0;
-			for (idx_t j = 0; j < rows; j++) {
-				bits |= uint64_t(OP::Operation(static_cast<T>(data[first + j]), predicate)) << j;
+			if (valid == in_rows) {
+				for (idx_t j = 0; j < rows; j++) {
+					bits |= uint64_t(OP::Operation(static_cast<T>(data[first + j]), predicate)) << j;
+				}
+			} else {
+				for (auto rest = valid; rest != 0; rest &= rest - 1) {
+					const auto j = std::countr_zero(rest);
+					bits |= uint64_t(OP::Operation(static_cast<T>(data[first + j]), predicate)) << j;
+				}
 			}
-			const auto w = first / 64;
-			mask[w] &= validity ? bits & validity[w] : bits;
+			mask[first / 64] &= bits;
 		}
 	}
 

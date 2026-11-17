@@ -179,8 +179,29 @@ static void RunPostBindExtensions(ClientContext &context, Binder &binder, BoundS
 	}
 }
 
+static void CheckParameterGaps(const SQLStatement &statement,
+                               const case_insensitive_map_t<LogicalType> &parameter_type_hints) {
+	idx_t highest = 0;
+	for (auto &entry : statement.named_param_map) {
+		highest = MaxValue(highest, entry.second);
+	}
+	if (highest == statement.named_param_map.size()) {
+		return;
+	}
+	vector<bool> used(highest + 1, false);
+	for (auto &entry : statement.named_param_map) {
+		used[entry.second] = true;
+	}
+	for (idx_t index = 1; index < highest; index++) {
+		if (!used[index] && parameter_type_hints.find(to_string(index)) == parameter_type_hints.end()) {
+			throw ParameterNotAllowedException("could not determine data type of parameter $%d", index);
+		}
+	}
+}
+
 void Planner::CreatePlan(SQLStatement &statement) {
 	auto &profiler = QueryProfiler::Get(context);
+	CheckParameterGaps(statement, parameter_type_hints);
 	auto parameter_count = statement.named_param_map.size();
 
 	BoundParameterMap bound_parameters(parameter_data, &parameter_type_hints);

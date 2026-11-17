@@ -17,6 +17,24 @@ PreparedStatementData::PreparedStatementData(StatementType type) : statement_typ
 PreparedStatementData::~PreparedStatementData() {
 }
 
+void PreparedStatementData::Replans(const PreparedStatementData &previous) {
+	D_ASSERT(previous.plan_counts);
+	prepare_time = previous.prepare_time;
+	plan_counts = previous.plan_counts;
+	plan_counts->replanned = true;
+}
+
+void PreparedStatementData::CountExecution(bool planned) {
+	D_ASSERT(plan_counts);
+	auto &counts = *plan_counts;
+	if (planned || counts.replanned) {
+		counts.custom_plans++;
+	} else {
+		counts.generic_plans++;
+	}
+	counts.replanned = false;
+}
+
 void PreparedStatementData::CheckParameterCount(idx_t parameter_count) {
 	const auto required = properties.parameter_count;
 	if (parameter_count != required) {

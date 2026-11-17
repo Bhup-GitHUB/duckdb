@@ -555,6 +555,7 @@ void ClientContext::RegisterPreparedStatement(const Identifier &name, unique_ptr
 	prepared->properties.return_type = StatementReturnType::NOTHING;
 	prepared->properties.always_require_rebind = true;
 	prepared->prepare_time = timestamp_tz_t(Timestamp::GetCurrentTimestamp());
+	prepared->plan_counts = make_shared_ptr<PlanCounts>();
 	if (!client_data->prepared_statements.try_emplace(name, std::move(prepared)).second) {
 		throw CatalogException::DuplicatePreparedStatement(name);
 	}

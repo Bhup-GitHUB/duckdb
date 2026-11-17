@@ -23,6 +23,12 @@ class ClientContext;
 class PhysicalPlan;
 class SQLStatement;
 
+struct PlanCounts {
+	idx_t generic_plans = 0;
+	idx_t custom_plans = 0;
+	bool replanned = false;
+};
+
 class PreparedStatementData {
 public:
 	DUCKDB_API explicit PreparedStatementData(StatementType type);
@@ -48,8 +54,11 @@ public:
 
 	case_insensitive_map_t<LogicalType> parameter_type_hints;
 	timestamp_tz_t prepare_time = timestamp_tz_t::epoch();
+	shared_ptr<PlanCounts> plan_counts;
 
 public:
+	DUCKDB_API void Replans(const PreparedStatementData &previous);
+	DUCKDB_API void CountExecution(bool planned);
 	void CheckParameterCount(idx_t parameter_count);
 	//! Whether or not the prepared statement data requires the query to rebound for the given parameters
 	bool RequireRebind(ClientContext &context, optional_ptr<identifier_map_t<BoundParameterData>> values);

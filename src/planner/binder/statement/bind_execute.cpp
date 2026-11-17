@@ -138,6 +138,7 @@ BoundStatement Binder::Bind(ExecuteStatement &stmt) {
 			VerifyResultTypes(stmt, *entry->second, *replanned, bind_values);
 			replanned->parameter_type_hints = prepared->parameter_type_hints;
 			replanned->prepare_time = prepared->prepare_time;
+			replanned->plan_counts = prepared->plan_counts;
 			prepared = std::move(replanned);
 			rebound_plan = std::move(generic_planner.plan);
 			replaces = stmt.name;
@@ -168,6 +169,7 @@ BoundStatement Binder::Bind(ExecuteStatement &stmt) {
 	result.types = prepared->types;
 
 	prepared->Bind(context, bind_values);
+	entry->second->CountExecution(rebound_plan != nullptr);
 	if (rebound_plan) {
 		auto execute_plan = make_uniq<LogicalExecute>(std::move(prepared));
 		execute_plan->replaces = std::move(replaces);

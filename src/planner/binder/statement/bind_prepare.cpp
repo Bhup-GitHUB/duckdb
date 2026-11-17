@@ -21,6 +21,7 @@ BoundStatement Binder::Bind(PrepareStatement &stmt) {
 	auto prepared_data = prepared_planner.PrepareSQLStatement(std::move(stmt.statement));
 	prepared_data->parameter_type_hints = std::move(stmt.parameter_type_hints);
 	prepared_data->prepare_time = timestamp_tz_t(Timestamp::GetCurrentTimestamp());
+	prepared_data->plan_counts = make_shared_ptr<PlanCounts>();
 	global_binder_state->bound_tables = prepared_planner.binder->global_binder_state->bound_tables;
 
 	if (prepared_planner.properties.always_require_rebind) {

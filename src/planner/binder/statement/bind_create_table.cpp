@@ -656,7 +656,13 @@ static void FindMatchingPrimaryKeyColumns(const ColumnList &columns, const vecto
 			fk.pk_columns = pk_names;
 			return;
 		}
-		if (pk_names != fk.pk_columns) {
+		const auto contains_all = [](const vector<Identifier> &names, const vector<Identifier> &wanted) {
+			return std::all_of(wanted.begin(), wanted.end(), [&](const Identifier &name) {
+				return std::find(names.begin(), names.end(), name) != names.end();
+			});
+		};
+		if (pk_names.size() != fk.pk_columns.size() || !contains_all(pk_names, fk.pk_columns) ||
+		    !contains_all(fk.pk_columns, pk_names)) {
 			continue;
 		}
 		if (unique.IsDeferred()) {

@@ -17,7 +17,13 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalExecute &op) {
 		PhysicalPlanGenerator inner_planner(context);
 		op.prepared->physical_plan = inner_planner.PlanInternal(*op.children[0]);
 		op.prepared->types = op.prepared->physical_plan->Root().types;
-		ClientData::Get(context).prepared_statements[*op.replaces] = op.prepared;
+		auto &statements = ClientData::Get(context).prepared_statements;
+		const auto replaced = statements[*op.replaces];
+		for (auto &entry : statements) {
+			if (entry.second == replaced) {
+				entry.second = op.prepared;
+			}
+		}
 		return Make<PhysicalExecute>(op.prepared->physical_plan->Root(), op.prepared);
 	}
 	auto &plan = CreatePlan(*op.children[0]);

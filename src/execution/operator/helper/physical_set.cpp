@@ -10,6 +10,19 @@
 
 namespace duckdb {
 
+static Value CastSettingValue(ClientContext &context, const Identifier &name, const Value &value,
+                              const LogicalType &type) {
+	auto result = value.TryCastAs(context, type);
+	if (result) {
+		return std::move(*result);
+	}
+	if (type.id() == LogicalTypeId::BOOLEAN) {
+		throw InvalidInputException("parameter \"%s\" requires a Boolean value", name.GetIdentifierName());
+	}
+	throw InvalidInputException("invalid value for parameter \"%s\": \"%s\"", name.GetIdentifierName(),
+	                            value.ToString());
+}
+
 void PhysicalSet::SetGenericVariable(ClientContext &context, idx_t setting_index, SetScope scope, Value target_value) {
 	Settings::Set(context, setting_index, scope, std::move(target_value));
 }
@@ -50,7 +63,7 @@ void PhysicalSet::SetExtensionVariable(ClientContext &context, ExtensionOption &
 		throw InvalidInputException("parameter %s is global and cannot be set inside a transaction", name);
 	}
 
-	Value target_value = value.CastAs(context, extension_option.type);
+	Value target_value = CastSettingValue(context, name, value, extension_option.type);
 	if (extension_option.set_function) {
 		extension_option.set_function(context, effective_scope, target_value);
 	}
@@ -76,7 +89,7 @@ void PhysicalSet::SetVariable(ClientContext &context, const Identifier &name, Se
 		}
 		// Invoke the pre-SET observer after resolution so the handler only sees
 		// valid option names and can safely snapshot the current value.
-		Value casted_value = value.CastAs(context, extension_option.type);
+		Value casted_value = CastSettingValue(context, name, value, extension_option.type);
 		context.OnSettingChange(name.GetIdentifierName(), scope,
 		                        SessionValue(context, name, extension_option.setting_index));
 		SetExtensionVariable(context, extension_option, name, scope, casted_value);
@@ -86,7 +99,7 @@ void PhysicalSet::SetVariable(ClientContext &context, const Identifier &name, Se
 		return;
 	}
 	SetScope variable_scope = GetSettingScope(*option, scope);
-	Value input_val = value.CastAs(context, DBConfig::ParseLogicalType(option->parameter_type));
+	Value input_val = CastSettingValue(context, name, value, DBConfig::ParseLogicalType(option->parameter_type));
 	context.OnSettingChange(
 	    name.GetIdentifierName(), scope,
 	    option->get_local ? option->get_local(context)

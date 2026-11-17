@@ -150,6 +150,7 @@ struct TableFunctionBindInput {
 	//! detail than its names and types - e.g. attach the field ids of its columns, or the key-value metadata of the
 	//! file - which the multi-file reader then uses to read the file
 	optional_ptr<TableFunctionFileBindInfo> file_info;
+	TableIndex table_index;
 };
 
 struct TableFunctionInitInput {

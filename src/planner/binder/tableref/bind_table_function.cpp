@@ -260,6 +260,7 @@ BoundStatement Binder::BindTableFunctionInternal(BoundTableFunction &table_funct
 	if (table_function.bind || table_function.bind_replace || table_function.bind_operator) {
 		TableFunctionBindInput bind_input(parameters, named_parameters, input_table_types, input_table_names,
 		                                  table_function.function_info.get(), this, table_function, ref, input_plan);
+		bind_input.table_index = bind_index;
 		if (table_function.bind_operator) {
 			auto new_plan = table_function.bind_operator(context, bind_input, bind_index, return_names);
 			if (new_plan) {
@@ -303,12 +304,7 @@ BoundStatement Binder::BindTableFunctionInternal(BoundTableFunction &table_funct
 			throw BinderException("Failed to bind %s: nullptr returned from bind_replace without bind function",
 			                      table_function.GetName());
 		}
-		auto &data_reads = GetStatementProperties().data_reads;
-		const auto registered_reads = data_reads.size();
 		bind_data = table_function.bind(context, bind_input, return_types, return_names);
-		for (idx_t i = registered_reads; i < data_reads.size(); i++) {
-			data_reads[i].table_index = bind_index;
-		}
 		if (ref.with_ordinality == OrdinalityType::WITH_ORDINALITY) {
 			// check if column name 'ordinality' already exists and if so, replace it iteratively until free name is
 			// found

@@ -1566,15 +1566,18 @@ idx_t GroupedAggregateHashTable::CombineSliced(unique_ptr<TupleDataCollection> &
 	return group_count;
 }
 
-void GroupedAggregateHashTable::InitializeScan(AggregateHTScanState &scan_state) {
-	scan_state.partition_idx = 0;
-	vector<idx_t> group_indexes(layout_ptr->ColumnCount() - 1);
+static vector<column_t> GroupColumns(const TupleDataLayout &layout) {
+	vector<column_t> group_indexes(layout.ColumnCount() - 1);
 	for (idx_t i = 0; i < group_indexes.size(); i++) {
 		group_indexes[i] = i;
 	}
+	return group_indexes;
+}
 
+void GroupedAggregateHashTable::InitializeScan(AggregateHTScanState &scan_state) {
+	scan_state.partition_idx = 0;
 	auto &partition = partitioned_data->GetPartitions()[scan_state.partition_idx];
-	partition->InitializeScan(scan_state.scan_states, group_indexes);
+	partition->InitializeScan(scan_state.scan_states, GroupColumns(*layout_ptr));
 }
 
 bool GroupedAggregateHashTable::ScanGroups(AggregateHTScanState &scan_state, DataChunk &distinct_rows) {
@@ -1592,7 +1595,7 @@ bool GroupedAggregateHashTable::ScanGroups(AggregateHTScanState &scan_state, Dat
 			return false;
 		} else {
 			auto &new_partition = partitioned_data->GetPartitions()[scan_state.partition_idx];
-			new_partition->InitializeScan(scan_state.scan_states);
+			new_partition->InitializeScan(scan_state.scan_states, GroupColumns(*layout_ptr));
 			return true;
 		}
 	}

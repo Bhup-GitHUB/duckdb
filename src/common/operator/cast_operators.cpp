@@ -1856,10 +1856,37 @@ bool TryCastToGeometry::Operation(string_t input, string_t &result, Vector &resu
 //===--------------------------------------------------------------------===//
 // Cast To Date
 //===--------------------------------------------------------------------===//
+static DateCastResult TryConvertBasicDate(string_t input, date_t &result) {
+	auto data = input.GetData();
+	idx_t start = 0;
+	idx_t end = input.GetSize();
+	while (start < end && StringUtil::CharacterIsSpace(data[start])) {
+		start++;
+	}
+	while (end > start && StringUtil::CharacterIsSpace(data[end - 1])) {
+		end--;
+	}
+	if (end - start != 8) {
+		return DateCastResult::ERROR_INCORRECT_FORMAT;
+	}
+	int32_t value = 0;
+	for (idx_t i = start; i < end; i++) {
+		if (!StringUtil::CharacterIsDigit(data[i])) {
+			return DateCastResult::ERROR_INCORRECT_FORMAT;
+		}
+		value = value * 10 + (data[i] - '0');
+	}
+	return Date::TryFromDate(value / 10000, value / 100 % 100, value % 100, result) ? DateCastResult::SUCCESS
+	                                                                                : DateCastResult::ERROR_RANGE;
+}
+
 static DateCastResult TryConvertDateCast(string_t input, date_t &result, bool strict) {
 	idx_t pos = 0;
 	bool special = false;
 	auto date_result = Date::TryConvertDate(input.GetData(), input.GetSize(), pos, result, special, strict);
+	if (date_result == DateCastResult::ERROR_INCORRECT_FORMAT && !strict) {
+		return TryConvertBasicDate(input, result);
+	}
 	auto timestamp_suffix_pos = pos;
 	if (date_result == DateCastResult::SUCCESS) {
 		while (pos < input.GetSize() && StringUtil::CharacterIsSpace(input.GetData()[pos])) {

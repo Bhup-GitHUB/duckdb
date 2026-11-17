@@ -506,6 +506,77 @@ namespace pdqsort_detail {
             leftmost = false;
         }
     }
+
+    template<class Iter, class Compare>
+    inline void pdqselect_loop(Iter begin, Iter nth, Iter end, Compare comp, int bad_allowed) {
+        typedef typename std::iterator_traits<Iter>::difference_type diff_t;
+        bool leftmost = true;
+        while (true) {
+            diff_t size = end - begin;
+            if (size < insertion_sort_threshold) {
+                if (leftmost) insertion_sort(begin, end, comp);
+                else unguarded_insertion_sort(begin, end, comp);
+                return;
+            }
+
+            diff_t s2 = size / 2;
+            if (size > ninther_threshold) {
+                sort3(begin, begin + s2, end - 1, comp);
+                sort3(begin + 1, begin + (s2 - 1), end - 2, comp);
+                sort3(begin + 2, begin + (s2 + 1), end - 3, comp);
+                sort3(begin + (s2 - 1), begin + s2, begin + (s2 + 1), comp);
+                std::iter_swap(begin, begin + s2);
+            } else sort3(begin + s2, begin, end - 1, comp);
+
+            if (!leftmost && !comp(*(begin - 1), *begin)) {
+                Iter equal_end = partition_left(begin, end, comp);
+                if (nth <= equal_end) return;
+                begin = equal_end + 1;
+                continue;
+            }
+
+            Iter pivot_pos = partition_right_branchless(begin, end, comp).first;
+            if (pivot_pos == nth) return;
+
+            diff_t l_size = pivot_pos - begin;
+            diff_t r_size = end - (pivot_pos + 1);
+            if (l_size < size / 8 || r_size < size / 8) {
+                if (--bad_allowed == 0) {
+                    std::partial_sort(begin, nth + 1, end, comp);
+                    return;
+                }
+                if (nth < pivot_pos && l_size >= insertion_sort_threshold) {
+                    std::iter_swap(begin,             begin + l_size / 4);
+                    std::iter_swap(pivot_pos - 1, pivot_pos - l_size / 4);
+
+                    if (l_size > ninther_threshold) {
+                        std::iter_swap(begin + 1,         begin + (l_size / 4 + 1));
+                        std::iter_swap(begin + 2,         begin + (l_size / 4 + 2));
+                        std::iter_swap(pivot_pos - 2, pivot_pos - (l_size / 4 + 1));
+                        std::iter_swap(pivot_pos - 3, pivot_pos - (l_size / 4 + 2));
+                    }
+                }
+                if (pivot_pos < nth && r_size >= insertion_sort_threshold) {
+                    std::iter_swap(pivot_pos + 1, pivot_pos + (1 + r_size / 4));
+                    std::iter_swap(end - 1,                   end - r_size / 4);
+
+                    if (r_size > ninther_threshold) {
+                        std::iter_swap(pivot_pos + 2, pivot_pos + (2 + r_size / 4));
+                        std::iter_swap(pivot_pos + 3, pivot_pos + (3 + r_size / 4));
+                        std::iter_swap(end - 2,             end - (1 + r_size / 4));
+                        std::iter_swap(end - 3,             end - (2 + r_size / 4));
+                    }
+                }
+            }
+
+            if (nth < pivot_pos) {
+                end = pivot_pos;
+            } else {
+                begin = pivot_pos + 1;
+                leftmost = false;
+            }
+        }
+    }
 }
 
 
@@ -541,6 +612,18 @@ template<class Iter>
 inline void pdqsort_branchless(Iter begin, Iter end) {
     typedef typename std::iterator_traits<Iter>::value_type T;
     pdqsort_branchless(begin, end, std::less<T>());
+}
+
+template<class Iter, class Compare>
+inline void nth_element_branchless(Iter begin, Iter nth, Iter end, Compare comp) {
+    if (nth == end) return;
+    pdqsort_detail::pdqselect_loop<Iter, Compare>(begin, nth, end, comp, pdqsort_detail::log2(end - begin));
+}
+
+template<class Iter>
+inline void nth_element_branchless(Iter begin, Iter nth, Iter end) {
+    typedef typename std::iterator_traits<Iter>::value_type T;
+    nth_element_branchless(begin, nth, end, std::less<T>());
 }
 
 // NOLINTEND

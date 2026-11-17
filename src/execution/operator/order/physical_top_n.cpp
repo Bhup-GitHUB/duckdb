@@ -10,6 +10,7 @@
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/planner/filter/table_filter_function_helpers.hpp"
+#include "pdqsort.h"
 
 namespace duckdb {
 
@@ -99,6 +100,17 @@ template <SortKeyType SORT_KEY_TYPE>
 class TopNKeyHeap final : public TopNHeap {
 	using SORT_KEY = SortKey<SORT_KEY_TYPE>;
 	static_assert(SORT_KEY::HAS_PAYLOAD, "Top-N keys carry their row as payload");
+
+	struct HeapOrder {
+		bool operator()(const SORT_KEY &lhs, const SORT_KEY &rhs) const {
+			if constexpr (SORT_KEY::CONSTANT_SIZE) {
+				if (lhs.part0 != rhs.part0) {
+					return lhs.part0 < rhs.part0;
+				}
+			}
+			return lhs < rhs;
+		}
+	};
 
 public:
 	TopNKeyHeap(ClientContext &context, const PhysicalTopN &op)
@@ -206,11 +218,11 @@ private:
 		D_ASSERT(heap_size > 0);
 		if (heap.size() >= heap_size) {
 			D_ASSERT(!heap.empty());
-			std::pop_heap(heap.begin(), heap.end());
+			std::pop_heap(heap.begin(), heap.end(), HeapOrder());
 			heap.pop_back();
 		}
 		heap.push_back(entry);
-		std::push_heap(heap.begin(), heap.end());
+		std::push_heap(heap.begin(), heap.end(), HeapOrder());
 	}
 
 private:
@@ -286,12 +298,12 @@ void TopNKeyHeap<SORT_KEY_TYPE>::PublishBoundary(SortKeyBoundary &boundary) {
 		for (idx_t q = 1; q <= QUANTILES; q++) {
 			const auto rows = (heap.size() * q + QUANTILES - 1) / QUANTILES;
 			const auto nth = heap.begin() + NumericCast<int64_t>(rows - 1);
-			std::nth_element(rest, nth, heap.end());
+			duckdb_pdqsort::nth_element_branchless(rest, nth, heap.end());
 			const auto bytes = KeyBytes(*nth);
 			quantiles.push_back({string(bytes.GetData(), bytes.GetSize()), rows});
 			rest = nth + 1;
 		}
-		std::make_heap(heap.begin(), heap.end());
+		std::make_heap(heap.begin(), heap.end(), HeapOrder());
 		boundary.Contribute(producer, std::move(quantiles), heap_size);
 		next_contribution = heap.size() * 2;
 	}
@@ -437,7 +449,7 @@ void TopNKeyHeap<SORT_KEY_TYPE>::Combine(TopNHeap &other_p) {
 
 template <SortKeyType SORT_KEY_TYPE>
 void TopNKeyHeap<SORT_KEY_TYPE>::Finalize() {
-	std::sort(heap.begin(), heap.end());
+	duckdb_pdqsort::pdqsort_branchless(heap.begin(), heap.end());
 }
 
 template <SortKeyType SORT_KEY_TYPE>

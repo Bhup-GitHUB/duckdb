@@ -147,14 +147,13 @@ public:
 	}
 };
 
-template <idx_t REMAINING>
-static bool SortKeyLessThan(const uint64_t *const &lhs, const uint64_t *const &rhs) {
-	return (*lhs < *rhs) || ((*lhs == *rhs) && SortKeyLessThan<REMAINING - 1>(lhs + 1, rhs + 1));
-}
-
-template <>
-inline bool SortKeyLessThan<1>(const uint64_t *const &lhs, const uint64_t *const &rhs) {
-	return *lhs < *rhs;
+template <idx_t PARTS>
+static bool SortKeyLessThan(const uint64_t *lhs, const uint64_t *rhs) {
+	unsigned long long borrow = 0;
+	for (idx_t i = PARTS; i-- > 0;) {
+		__builtin_subcll(lhs[i], rhs[i], borrow, &borrow);
+	}
+	return borrow != 0;
 }
 
 template <class SORT_KEY, bool HAS_PAYLOAD>

@@ -1,0 +1,37 @@
+# name: test/sql/order/order_unbalanced_partitions.test
+# description: Rows in an order that unbalances every pdqsort partition finish their sort in heapsort
+# group: [order]
+
+query I
+SELECT b FROM (VALUES (1), (21), (24), (28), (22), (8), (29), (20), (26), (3), (4), (25), (7), (23), (27), (0), (2), (5), (6), (17), (18), (15), (16), (19), (14), (11), (12), (9), (10), (13)) t(b) ORDER BY b
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29

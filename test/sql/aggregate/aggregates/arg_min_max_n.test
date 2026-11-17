@@ -21,8 +21,8 @@ SELECT list(rs.val) FROM (SELECT val, arg, row_number() OVER (ORDER BY arg DESC)
 query I rowsort
 SELECT arg_max(arg, val, 2 ORDER BY arg) FROM t1 GROUP BY val;
 ----
-[2, 1]
-[5, 4]
+[1, 2]
+[4, 5]
 
 statement ok
 CREATE TABLE t2 AS SELECT i%5 as even_groups, i FROM range(10000) t(i);

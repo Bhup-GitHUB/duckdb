@@ -14,6 +14,7 @@
 #include "duckdb/common/enums/order_type.hpp"
 #include "duckdb/function/aggregate_function.hpp"
 #include "duckdb/function/create_sort_key.hpp"
+#include "pdqsort.h"
 #include <new>
 
 namespace duckdb {
@@ -154,7 +155,7 @@ public:
 	}
 
 	HeapEntry<T> *SortAndGetHeap() {
-		std::sort_heap(heap, heap + size, Compare());
+		duckdb_pdqsort::pdqsort_branchless(heap, heap + size, Compare());
 		return heap;
 	}
 
@@ -244,7 +245,7 @@ public:
 	}
 
 	STORAGE_TYPE *SortAndGetHeap() {
-		std::sort_heap(heap, heap + size, Compare());
+		duckdb_pdqsort::pdqsort_branchless(heap, heap + size, Compare());
 		return heap;
 	}
 

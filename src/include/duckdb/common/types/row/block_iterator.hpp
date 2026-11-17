@@ -243,7 +243,7 @@ public:
 	using value_type = T;
 	using pointer = value_type *;
 	using reference = value_type &;
-	using difference_type = idx_t;
+	using difference_type = int64_t;
 	using traits = std::iterator_traits<block_iterator_t>;
 
 public:
@@ -308,34 +308,34 @@ public:
 
 	//! Random access
 	block_iterator_t &operator+=(const difference_type &n) {
-		state->Add(block_or_chunk_idx, tuple_idx, n);
+		state->Add(block_or_chunk_idx, tuple_idx, static_cast<idx_t>(n));
 		return *this;
 	}
 	block_iterator_t &operator-=(const difference_type &n) {
-		state->Subtract(block_or_chunk_idx, tuple_idx, n);
+		state->Subtract(block_or_chunk_idx, tuple_idx, static_cast<idx_t>(n));
 		return *this;
 	}
 	block_iterator_t operator+(const difference_type &n) const {
 		idx_t new_block_or_chunk_idx = block_or_chunk_idx;
 		idx_t new_tuple_idx = tuple_idx;
-		state->Add(new_block_or_chunk_idx, new_tuple_idx, n);
+		state->Add(new_block_or_chunk_idx, new_tuple_idx, static_cast<idx_t>(n));
 		return block_iterator_t(*state, new_block_or_chunk_idx, new_tuple_idx);
 	}
 	block_iterator_t operator-(const difference_type &n) const {
 		idx_t new_block_or_chunk_idx = block_or_chunk_idx;
 		idx_t new_tuple_idx = tuple_idx;
-		state->Subtract(new_block_or_chunk_idx, new_tuple_idx, n);
+		state->Subtract(new_block_or_chunk_idx, new_tuple_idx, static_cast<idx_t>(n));
 		return block_iterator_t(*state, new_block_or_chunk_idx, new_tuple_idx);
 	}
 
 	reference operator[](const difference_type &n) const {
-		return state->template GetValueAtIndex<T>(n);
+		return state->template GetValueAtIndex<T>(static_cast<idx_t>(n));
 	}
 
 	//! Difference between iterators
 	difference_type operator-(const block_iterator_t &other) const {
-		return state->GetIndex(block_or_chunk_idx, tuple_idx) -
-		       other.state->GetIndex(other.block_or_chunk_idx, other.tuple_idx);
+		return static_cast<difference_type>(state->GetIndex(block_or_chunk_idx, tuple_idx) -
+		                                    other.state->GetIndex(other.block_or_chunk_idx, other.tuple_idx));
 	}
 
 	//! Comparison operators

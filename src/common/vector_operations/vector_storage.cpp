@@ -10,22 +10,16 @@ namespace {
 template <class T>
 
 void CopyToStorageLoop(const Vector &source, data_ptr_t target) {
-	auto result_data = (T *)target;
 	for (auto entry : source.Values<T>()) {
-		if (!entry.IsValid()) {
-			result_data[entry.GetIndex()] = NullValue<T>();
-		} else {
-			result_data[entry.GetIndex()] = entry.GetValue();
-		}
+		Store<T>(entry.IsValid() ? entry.GetValue() : NullValue<T>(), target + entry.GetIndex() * sizeof(T));
 	}
 }
 
 template <class T>
 void ReadFromStorageLoop(data_ptr_t source, idx_t count, Vector &result) {
-	auto ldata = (T *)source;
 	auto result_data = FlatVector::Writer<T>(result, count);
 	for (idx_t i = 0; i < count; i++) {
-		result_data.WriteValue(ldata[i]);
+		result_data.WriteValue(Load<T>(source + i * sizeof(T)));
 	}
 }
 

@@ -110,15 +110,11 @@ public:
 	void WriteValue(const char *value) final;
 	void WriteValue(bool value) final;
 	void WriteDataPtr(const_data_ptr_t ptr, idx_t count) final;
-	void BeginDataParts(idx_t size) final;
-	void WriteDataPart(const_data_ptr_t ptr, idx_t count) final;
-	data_ptr_t AllocDataPart(idx_t count) final;
-	void EndDataParts() final;
+	optional_ptr<WriteStream> BeginDataParts(idx_t size) final;
 
 private:
 	vector<DebugState> debug_stack;
 	WriteStream &stream;
-	idx_t parts_left = 0;
 
 protected:
 	duckdb::SerializationData data;

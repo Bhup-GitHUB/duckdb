@@ -9,17 +9,20 @@
 #pragma once
 
 #include "duckdb/common/enum_util.hpp"
+#include "duckdb/common/serializer/memory_stream.hpp"
 #include "duckdb/common/serializer/serialization_traits.hpp"
 #include "duckdb/common/serializer/serialization_data.hpp"
+#include "duckdb/common/serializer/write_stream.hpp"
 #include "duckdb/common/identifier.hpp"
 #include "duckdb/common/types/interval.hpp"
 #include "duckdb/common/types/string_type.hpp"
 #include "duckdb/common/types/uhugeint.hpp"
-#include "duckdb/common/unique_ptr.hpp"
 #include "duckdb/common/unordered_map.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/queue.hpp"
+#include "duckdb/common/optional.hpp"
 #include "duckdb/common/optional_idx.hpp"
+#include "duckdb/common/optional_ptr.hpp"
 #include "duckdb/common/optionally_owned_ptr.hpp"
 #include "duckdb/common/value_operations/value_operations.hpp"
 #include "duckdb/execution/operator/csv_scanner/csv_option.hpp"
@@ -54,11 +57,6 @@ class Serializer {
 protected:
 	SerializationOptions options;
 	SerializationData data;
-
-private:
-	unsafe_unique_array<data_t> parts;
-	idx_t parts_size = 0;
-	idx_t parts_written = 0;
 
 public:
 	virtual ~Serializer() {
@@ -207,10 +205,28 @@ public:
 	template <class FUNC>
 	void WritePropertyInParts(this auto &self, const field_id_t field_id, const char *tag, idx_t size, FUNC write) {
 		self.OnPropertyBegin(field_id, tag);
-		self.BeginDataParts(size);
-		write([&](const_data_ptr_t ptr, idx_t count) { self.WriteDataPart(ptr, count); },
-		      [&](idx_t count) { return self.AllocDataPart(count); });
-		self.EndDataParts();
+		optional<MemoryStream> staged;
+		auto stream = self.BeginDataParts(size);
+		if (!stream) {
+			stream = &staged.emplace(size);
+		}
+		idx_t written = 0;
+		write(
+		    [&](const_data_ptr_t ptr, idx_t count) {
+			    if (count != 0) {
+				    stream->WriteData(ptr, count);
+			    }
+			    written += count;
+		    },
+		    [&](idx_t count) {
+			    const auto allocated = stream->Alloc(count);
+			    written += allocated ? count : 0;
+			    return allocated;
+		    });
+		D_ASSERT(written == size);
+		if (staged) {
+			self.WriteDataPtr(staged->GetData(), size);
+		}
 		self.OnPropertyEnd();
 	}
 
@@ -488,10 +504,9 @@ public:
 	virtual void WriteValue(const string &value) = 0;
 	virtual void WriteValue(const char *str) = 0;
 	virtual void WriteDataPtr(const_data_ptr_t ptr, idx_t count) = 0;
-	virtual void BeginDataParts(idx_t size);
-	virtual void WriteDataPart(const_data_ptr_t ptr, idx_t count);
-	virtual data_ptr_t AllocDataPart(idx_t count);
-	virtual void EndDataParts();
+	virtual optional_ptr<WriteStream> BeginDataParts(idx_t size) {
+		return nullptr;
+	}
 	//! Identifiers are serialized identically to a plain string (preserving the original casing)
 	void WriteValue(this auto &self, const Identifier &value) {
 		self.WriteValue(value.GetIdentifierName());
